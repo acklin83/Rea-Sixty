@@ -10,6 +10,7 @@
 <!-- Filled in by ORC as it serves the page (orc/PhonesServer.cpp). -->
 <meta name="moreme-studio" content="">
 <meta name="moreme-version" content="">
+<meta name="moreme-performer" content="">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Inter+Tight:wght@700;900&display=swap" rel="stylesheet">
 <style>
@@ -188,7 +189,75 @@ body{
 
 /* STICKY MASTER */
 #mix.sticky-master .card.master{position:sticky;top:0;z-index:5;box-shadow:0 6px 14px rgba(0,0,0,0.5)}
-#mix.wide.sticky-master .card.master{position:sticky;top:auto;left:0;z-index:5;box-shadow:6px 0 14px rgba(0,0,0,0.5)}
+/* Fixed on the right on the strips (Frank 03.11.2026), at the end of the row. */
+#mix.wide.sticky-master .card.master{order:99;margin-left:auto;position:sticky;top:auto;left:auto;right:0;z-index:5;box-shadow:-6px 0 14px rgba(0,0,0,0.5)}
+
+/* PERFORMER: header line, EQ/DYN keys, FX send, dB scale, swipe hint */
+.head .who small{display:block;font-size:12px;font-weight:500;color:var(--fg2)}
+.head .right{display:flex;align-items:center;gap:2px}
+.moon{background:none;border:none;color:var(--fg2);font-size:20px;padding:6px 8px;cursor:pointer}
+.keys{display:flex;gap:6px;margin:6px 0 2px}
+.keys button{flex:1;background:none;border:1px solid var(--accent);color:var(--accent);border-radius:8px;font:inherit;font-size:13px;font-weight:700;padding:6px 0;cursor:pointer}
+.fxb{position:relative;height:18px;background:var(--bg3);border-radius:9px;margin:6px 0 2px;cursor:pointer;touch-action:manipulation}
+.fxb .ff{position:absolute;left:0;top:0;bottom:0;background:var(--green);opacity:.45;border-radius:9px}
+.fxb .ft{position:absolute;top:0;bottom:0;width:10px;margin-left:-5px;background:var(--green);border-radius:4px}
+.fxb span{position:absolute;right:7px;top:0;line-height:18px;font-size:10px;font-weight:700;color:var(--green)}
+.tick{display:none;position:absolute;left:-20px;width:18px;text-align:right;font-size:10px;line-height:10px;margin-bottom:-5px;color:var(--fg3);pointer-events:none}
+#mix.wide .tick{display:block}
+#mix.wide .keys{flex-direction:column;gap:4px}
+#hint{flex:none;text-align:center;font-size:12px;color:var(--fg3);padding:2px 0 6px}
+#hint:empty{display:none}
+.card.nomaster{display:none}
+@media (max-height:500px){
+  .head{padding:6px 12px 4px}
+  #mix.wide{padding:2px 8px 6px}
+  #mix.wide .card{min-height:0;padding:6px 6px 6px}
+  #mix.wide .fader{min-height:50px;margin:4px auto}
+  #mix.wide .btn{height:28px;font-size:14px}
+  #mix.wide .pan{width:26px;height:26px}
+  #mix.wide .pan .pthumb{height:10px}
+  #mix.wide .keys button{padding:3px 0;font-size:11px}
+  #mix.wide .ctrl{gap:3px;margin-top:3px}
+}
+
+/* MY FADERS, in the settings */
+.my{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #2a2a2a;font-size:15px}
+.my .n{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.my.off .n{color:var(--fg3)}
+.my .sw{width:12px;height:12px;border-radius:50%;flex:none}
+.my button{background:var(--bg3);border:none;border-radius:6px;color:var(--fg);font:inherit;font-size:13px;padding:5px 9px;cursor:pointer}
+
+/* STRIP PAGE: EQ and dynamics */
+#strip{position:fixed;inset:0;z-index:90;background:var(--bg);display:none;flex-direction:column;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+#strip.open{display:flex}
+#strip .bar{flex:none;display:flex;align-items:center;gap:8px;padding:12px 14px}
+#strip .bar b{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:16px}
+#strip .bar button{background:var(--bg3);border:none;border-radius:8px;color:var(--fg);font:inherit;font-size:14px;padding:8px 12px;cursor:pointer}
+#strip .bar button.on{background:var(--accent);color:#000;font-weight:700}
+#strip .body{flex:1;min-height:0;overflow:auto;padding:0 14px 16px;touch-action:pan-y}
+#strip svg{display:block;width:100%;background:var(--bg2);border-radius:12px;touch-action:none;margin-bottom:10px}
+.sl{margin:10px 0}
+.sl .h{display:flex;justify-content:space-between;font-size:13px;color:var(--fg2);margin-bottom:4px}
+.sl .h b{color:var(--fg);font-weight:600}
+.sl .t{position:relative;height:30px;background:var(--bg3);border-radius:15px;touch-action:none;cursor:pointer}
+.sl .t i{position:absolute;left:0;top:0;bottom:0;background:var(--accent);opacity:.5;border-radius:15px}
+.sl .t u{position:absolute;top:3px;width:24px;height:24px;margin-left:-12px;border-radius:50%;background:#fff}
+.seg2{display:inline-flex;background:var(--bg3);border-radius:8px;padding:2px;margin:4px 0 8px}
+.seg2 button{background:none;border:none;border-radius:6px;color:var(--fg2);font:inherit;font-size:13px;padding:5px 12px;cursor:pointer}
+.seg2 button.on{background:var(--accent);color:#000;font-weight:700}
+.grp{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--fg2);margin:18px 0 6px;display:flex;justify-content:space-between;align-items:center}
+.grp button{background:var(--bg3);border:none;border-radius:6px;color:var(--fg2);font:inherit;font-size:12px;padding:4px 10px;text-transform:none;letter-spacing:0;cursor:pointer}
+.grp button.on{background:var(--accent);color:#000;font-weight:700}
+
+/* LIGHT */
+body.light{--bg:#eef0f3;--bg2:#fff;--bg3:#dfe2e7;--fg:#111;--fg2:#555;--fg3:#888}
+body.light .card.master{background:#fff;border-color:#b9d4ea}
+body.light #mix.wide .fader .thumb{background:#fff;border-color:#999}
+body.light #mix.wide .pan{border-color:#c4c7cc}
+body.light .overlay{background:rgba(255,255,255,.85)}
+body.light .my,body.light .overlay input{border-color:#d0d3d9}
+body.light #intro button.tk{border-color:#d0d3d9}
+body.light #toast{background:#fff;border-color:#c4c7cc}
 </style>
 </head>
 <body>
@@ -196,12 +265,15 @@ body{
 <div class="head">
   <div class="brand"><span class="dot" id="connDot"></span><span>More<span class="lo">Me</span></span></div>
   <div class="who" id="whoBox"></div>
-  <button class="gear" id="gearBtn" aria-label="settings" data-t-aria="settings">⚙</button>
+  <div class="right">
+    <button class="moon" id="moonBtn" aria-label="light or dark">☾</button>
+    <button class="gear" id="gearBtn" aria-label="settings" data-t-aria="settings">⚙</button>
+  </div>
 </div>
 
 <!-- INTRO -->
 <div id="intro" class="hidden">
-  <img class="logo" id="logoImg" src="logo" alt="">
+  <img class="logo" id="logoImg" src="/logo" alt="">
   <h1>More<span class="lo">Me</span></h1>
   <p data-t-html="pick">Wähle deinen Kopfhörer-Mix.<br>Dieses Gerät merkt sich die Wahl.</p>
   <div class="pick" id="trackPick"><div class="empty" data-t="connecting">Verbinde mit ORC…</div></div>
@@ -209,6 +281,11 @@ body{
 
 <!-- MAIN MIX -->
 <div id="mix" class="wrap hidden"></div>
+<div id="hint"></div>
+
+<!-- EQ AND DYNAMICS -->
+<div id="strip"><div class="bar"><button id="stripBack"></button><b id="stripName"></b>
+  <span id="stripTabs" style="display:flex;gap:4px"></span></div><div class="body" id="stripBody"></div></div>
 
 <div id="toast"></div>
 
@@ -216,7 +293,11 @@ body{
 <div class="overlay" id="overlay">
   <div class="panel">
     <h2 data-t="settings">Einstellungen</h2>
-    <label data-t="mix">Kopfhörer-Mix</label>
+    <div id="myBox" class="hidden">
+      <label data-t="myFaders">Meine Fader</label>
+      <div id="myList"></div>
+    </div>
+    <label data-t="mix" id="setTrackLabel">Kopfhörer-Mix</label>
     <select id="setTrack" style="width:100%;background:var(--bg3);border:1px solid #2a2a2a;color:var(--fg);padding:12px;border-radius:10px;font:inherit;font-size:16px"></select>
     <label data-t="view">Ansicht</label>
     <select id="setLayout" style="width:100%;background:var(--bg3);border:1px solid #2a2a2a;color:var(--fg);padding:12px;border-radius:10px;font:inherit;font-size:16px">
@@ -267,6 +348,11 @@ body{
 function meta(name){ const m = document.querySelector('meta[name="'+name+'"]'); return m ? m.content : ''; }
 const VERSION = meta('moreme-version');
 const STUDIO = meta('moreme-studio');
+// ⇨ A PERFORMER'S LINK (/p/<id>, docs/moreme-performers-plan.md): this page is
+// theirs, the identity is the link and nothing a device remembers. Preview: in
+// Studio Control's frame, with its PIN and without what this device hid.
+const TOKEN = meta('moreme-performer');
+const PREVIEW = !!TOKEN && new URLSearchParams(location.search).has('preview');
 
 const LS = {
   identity: 'moreme.identity',   // selected mix id
@@ -274,7 +360,8 @@ const LS = {
   sticky: 'moreme.sticky',       // '1' = master pinned
   pin: 'moreme.pin',             // the studio PIN, once it was accepted
   lang: 'moreme.lang',           // 'auto' | 'de' | 'en' | 'fr' | 'it' | 'rm' | 'tlh'
-  meters: 'moreme.meters'        // '1' bars, '2' in the fader, '0' off
+  meters: 'moreme.meters',       // '1' bars, '2' in the fader, '0' off
+  theme: 'moreme.theme'          // 'light', else dark
 };
 // A phone that used the page under its old name keeps its choices. Moved, not
 // copied: a left-over old key would bring the mix back after every reset.
@@ -303,12 +390,16 @@ function pickLang(){
 let LANG = pickLang();
 const TEXT = {
   de: {
+    swipe: (n)=>n + ' weitere Fader, seitwärts wischen',
+    linkUnknown: 'Diesen Link gibt es nicht mehr. Frag im Studio nach dem neuen.', linkNoOutput: 'Dein Kopfhörer ist im Moment keinem Ausgang zugewiesen.',
+    myFaders: 'Meine Fader', hide: 'Ausblenden', show: 'Zeigen', back: 'Zurück', ownOutput: 'Mein Kopfhörer', on: 'An',
+    bass: 'Bass', mid: 'Mitten', treble: 'Höhen', lowCut: 'Low Cut', compression: 'Kompression', volume: 'Lautstärke',
     title: 'Kopfhörer-Mix',
     pick: 'Wähle deinen Kopfhörer-Mix.<br>Dieses Gerät merkt sich die Wahl.',
     connecting: 'Verbinde mit ORC…',
     settings: 'Einstellungen', mix: 'Kopfhörer-Mix', view: 'Ansicht',
     viewAuto: 'Automatisch (je nach Gerät)', viewPhone: 'iPhone (Liste)', viewPad: 'iPad (Mischpult)',
-    sticky: 'Master fixieren', stickyOff: 'Aus (mitscrollen)', stickyOn: 'An (oben/links angepinnt)',
+    sticky: 'Master fixieren', stickyOff: 'Aus (mitscrollen)', stickyOn: 'An (oben/rechts angepinnt)',
     meters: 'Pegelanzeige', metersBars: 'Balken', metersFader: 'Im Fader', metersOff: 'Aus',
     cancel: 'Abbrechen', save: 'Speichern', reset: 'Gerät zurücksetzen',
     wrongPin: 'Falscher PIN',
@@ -328,12 +419,16 @@ const TEXT = {
     language: 'Sprache', langAuto: 'Automatisch (Sprache des Geräts)'
   },
   en: {
+    swipe: (n)=>n + ' more, swipe sideways',
+    linkUnknown: 'This link no longer exists. Ask the studio for the new one.', linkNoOutput: 'Your headphones have no output right now.',
+    myFaders: 'My faders', hide: 'Hide', show: 'Show', back: 'Back', ownOutput: 'My headphones', on: 'On',
+    bass: 'Bass', mid: 'Mid', treble: 'Treble', lowCut: 'Low Cut', compression: 'Compression', volume: 'Volume',
     title: 'Headphone mix',
     pick: 'Pick your headphone mix.<br>This device remembers the choice.',
     connecting: 'Connecting to ORC…',
     settings: 'Settings', mix: 'Headphone mix', view: 'View',
     viewAuto: 'Automatic (by device)', viewPhone: 'iPhone (list)', viewPad: 'iPad (mixing desk)',
-    sticky: 'Pin the master', stickyOff: 'Off (scrolls along)', stickyOn: 'On (pinned top/left)',
+    sticky: 'Pin the master', stickyOff: 'Off (scrolls along)', stickyOn: 'On (pinned top/right)',
     meters: 'Meters', metersBars: 'Bars', metersFader: 'In the fader', metersOff: 'Off',
     cancel: 'Cancel', save: 'Save', reset: 'Reset this device',
     wrongPin: 'Wrong PIN',
@@ -353,12 +448,16 @@ const TEXT = {
     language: 'Language', langAuto: 'Automatic (the device\'s language)'
   },
   fr: {
+    swipe: (n)=>n + ' de plus, glisser sur le côté',
+    linkUnknown: 'Ce lien n\'existe plus. Demande le nouveau au studio.', linkNoOutput: 'Ton casque n\'a pas de sortie pour le moment.',
+    myFaders: 'Mes faders', hide: 'Masquer', show: 'Afficher', back: 'Retour', ownOutput: 'Mon casque', on: 'Oui',
+    bass: 'Graves', mid: 'Médiums', treble: 'Aigus', lowCut: 'Coupe-bas', compression: 'Compression', volume: 'Volume',
     title: 'Mix casque',
     pick: 'Choisis ton mix casque.<br>Cet appareil s\'en souvient.',
     connecting: 'Connexion à ORC…',
     settings: 'Réglages', mix: 'Mix casque', view: 'Affichage',
     viewAuto: 'Automatique (selon l\'appareil)', viewPhone: 'iPhone (liste)', viewPad: 'iPad (table de mixage)',
-    sticky: 'Fixer le master', stickyOff: 'Non (défile avec la page)', stickyOn: 'Oui (épinglé en haut/à gauche)',
+    sticky: 'Fixer le master', stickyOff: 'Non (défile avec la page)', stickyOn: 'Oui (épinglé en haut/à droite)',
     meters: 'Vumètres', metersBars: 'Barres', metersFader: 'Dans le fader', metersOff: 'Non',
     cancel: 'Annuler', save: 'Enregistrer', reset: 'Réinitialiser cet appareil',
     wrongPin: 'PIN incorrect',
@@ -378,12 +477,16 @@ const TEXT = {
     language: 'Langue', langAuto: 'Automatique (langue de l\'appareil)'
   },
   it: {
+    swipe: (n)=>n + ' in più, scorri di lato',
+    linkUnknown: 'Questo link non esiste più. Chiedi quello nuovo in studio.', linkNoOutput: 'Le tue cuffie al momento non hanno un\'uscita.',
+    myFaders: 'I miei fader', hide: 'Nascondi', show: 'Mostra', back: 'Indietro', ownOutput: 'Le mie cuffie', on: 'Sì',
+    bass: 'Bassi', mid: 'Medi', treble: 'Alti', lowCut: 'Taglio bassi', compression: 'Compressione', volume: 'Volume',
     title: 'Mix cuffie',
     pick: 'Scegli il tuo mix cuffie.<br>Questo dispositivo ricorda la scelta.',
     connecting: 'Connessione a ORC…',
     settings: 'Impostazioni', mix: 'Mix cuffie', view: 'Vista',
     viewAuto: 'Automatica (in base al dispositivo)', viewPhone: 'iPhone (elenco)', viewPad: 'iPad (mixer)',
-    sticky: 'Fissa il master', stickyOff: 'No (scorre con la pagina)', stickyOn: 'Sì (fisso in alto/a sinistra)',
+    sticky: 'Fissa il master', stickyOff: 'No (scorre con la pagina)', stickyOn: 'Sì (fisso in alto/a destra)',
     meters: 'Indicatori di livello', metersBars: 'Barre', metersFader: 'Nel fader', metersOff: 'No',
     cancel: 'Annulla', save: 'Salva', reset: 'Reimposta questo dispositivo',
     wrongPin: 'PIN errato',
@@ -405,12 +508,16 @@ const TEXT = {
   // Rumantsch Grischun, words checked against the Pledari Grond (30.10.2026);
   // wants a native speaker's read.
   rm: {
+    swipe: (n)=>n + ' ulteriurs, stritgar da la vart',
+    linkUnknown: 'Quest link na exista betg pli. Dumonda en il studio.', linkNoOutput: 'Tes headphones n\'han ussa nagina sortida.',
+    myFaders: 'Mes faders', hide: 'Zuppentar', show: 'Mussar', back: 'Enavos', ownOutput: 'Mes headphones', on: 'Gea',
+    bass: 'Bass', mid: 'Mid', treble: 'Treble', lowCut: 'Low Cut', compression: 'Cumpressiun', volume: 'Volumen',
     title: 'Mix d\'uregliers',
     pick: 'Tscherna tes mix d\'uregliers.<br>Quest apparat memorisescha la tscherna.',
     connecting: 'Colliaziun cun ORC…',
     settings: 'Preferenzas', mix: 'Mix d\'uregliers', view: 'Vista',
     viewAuto: 'Automatic (tenor l\'apparat)', viewPhone: 'iPhone (glista)', viewPad: 'iPad (pult da maschadar)',
-    sticky: 'Fixar il master', stickyOff: 'Na (scrolla cun la pagina)', stickyOn: 'Gea (fixà sura/a sanestra)',
+    sticky: 'Fixar il master', stickyOff: 'Na (scrolla cun la pagina)', stickyOn: 'Gea (fixà sura/a dretga)',
     meters: 'Indicatur dal livel', metersBars: 'Travs', metersFader: 'En il fader', metersOff: 'Na',
     cancel: 'Annullar', save: 'Memorisar', reset: 'Definir da nov quest apparat',
     wrongPin: 'PIN fauss',
@@ -431,6 +538,10 @@ const TEXT = {
   },
   // tlhIngan Hol, from the dictionary in my head; not checked against anything.
   tlh: {
+    swipe: (n)=>n + ' latlh',
+    linkUnknown: 'link tu\'lu\'be\'.', linkNoOutput: 'QoQ yIqaw.',
+    myFaders: 'fader wIj', hide: 'So\'', show: 'cha\'', back: 'chegh', ownOutput: 'QoQ wIj', on: 'HIja\'',
+    bass: 'Bass', mid: 'Mid', treble: 'Treble', lowCut: 'Low Cut', compression: 'Compression', volume: 'Volume',
     title: 'QoQ',
     pick: 'QoQlIj yIwIv.<br>wIvlIj qaw jan.',
     connecting: 'ORC vISamlI\'…',
@@ -457,6 +568,12 @@ const TEXT = {
   }
 };
 function t(k){ return TEXT[LANG][k]; }
+function identity(){ return TOKEN ? 'perf:'+TOKEN : localStorage.getItem(LS.identity); }
+function setIdentity(v){ if (TOKEN) return; if (v) localStorage.setItem(LS.identity, v); else localStorage.removeItem(LS.identity); }
+function pinNow(){
+  if (PREVIEW) { try { return window.parent.MOREME_PREVIEW_PIN || ''; } catch(_) { return ''; } }
+  return localStorage.getItem(LS.pin) || '';
+}
 function applyLanguage(){
   document.documentElement.lang = LANG;
   document.title = 'MoreMe · ' + (STUDIO || t('title'));
@@ -639,7 +756,7 @@ function wsConnect(){
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   let url = (window.MOREME_WS || (proto + '://' + location.host + '/ws'));
   try { ws = new WebSocket(url); } catch(e){ setTimeout(wsConnect, 1500); return; }
-  ws.onopen = ()=>{ state.lastReplyT = Date.now(); wsSend({t:'hello', pin: localStorage.getItem(LS.pin) || ''}); };
+  ws.onopen = ()=>{ state.lastReplyT = Date.now(); wsSend({t:'hello', pin: pinNow(), performer: TOKEN || undefined}); };
   ws.onmessage = (e)=>{ state.lastReplyT = Date.now(); try{ handleMsg(JSON.parse(e.data)); }catch(_){} };
   ws.onclose = ()=>{ ws = null; dropMeters(); setTimeout(wsConnect, 1200); };
   ws.onerror = ()=>{ try{ ws.close(); }catch(_){} };
@@ -664,19 +781,32 @@ function handleMsg(m){
       state.mixes = m.mixes || [];
       state.tmSeen = !!m.tmSeen;
       if (!metersOn()) wsSend({t:'meters', on:false});   // ORC starts every phone with them on
-      { const want = localStorage.getItem(LS.identity); if (want && state.mixes.some(x=>x.id===want)) wsSend({t:'select', mix:want}); }
+      state.link = m.link || 'ok';
+      {
+        const want = identity();
+        if (want && state.mixes.some(x=>x.id===want)) wsSend({t:'select', mix:want});
+        // Phones 1-4 and performers don't overlap: a remembered mix of the other
+        // kind is no choice any more, so the list shows again.
+        else if (want && !TOKEN && state.mixes.length && state.mixes[0].id.slice(0,5) !== want.slice(0,5)) setIdentity('');
+      }
       updateUI();
       break;
     case 'snapshot':
-      if (m.mix !== localStorage.getItem(LS.identity)) break;
+      if (m.mix !== identity()) break;
       state.mixId = m.mix;
-      state.sources = (m.sources || []).map(s=>Object.assign({}, s));
+      state.allSources = (m.sources || []).map(s=>Object.assign({}, s));
+      state.mayHide = !!m.hide;
+      state.sources = applyMine(state.allSources);
       state.recvs = state.sources.map(s=>{
         const v = (m.values && m.values[s.id]) || {};
-        return { vol: dbToAmp(v.db != null ? v.db : -300), pan: v.pan || 0, mute: v.mute ? 1 : 0, solo: v.solo ? 1 : 0 };
+        return { vol: dbToAmp(v.db != null ? v.db : -300), pan: v.pan || 0, mute: v.mute ? 1 : 0, solo: v.solo ? 1 : 0, fx: v.fx != null ? v.fx : -65 };
       });
       state.master.vol = dbToAmp((m.master&&m.master.db) != null ? m.master.db : -300);
       state.master.mute = (m.master&&m.master.mute) ? 1 : 0;
+      state.master.shown = !(m.master && m.master.shown === 0);
+      state.master.eq  = (m.master && m.master.eq)  || 0;
+      state.master.dyn = (m.master && m.master.dyn) || 0;
+      state.master.al  = (m.master && m.master.al)  || 0;
       delete $('mix').dataset.sig; // source set may have changed → full rebuild
       updateUI();
       break;
@@ -691,6 +821,7 @@ function handleMsg(m){
       if (m.pan !== undefined && !(dragging && state.dragKind==='pan')) r.pan = m.pan;
       if (m.mute !== undefined) r.mute = m.mute?1:0;
       if (m.solo !== undefined) r.solo = m.solo?1:0;
+      if (m.fx !== undefined && !(dragging && state.dragKind==='fx')) r.fx = m.fx;
       break;
     }
     case 'levels':
@@ -707,13 +838,15 @@ function handleMsg(m){
       if (m.db !== undefined && !(state.dragSend===0 && state.dragKind==='vol')) state.master.vol = dbToAmp(m.db);
       if (m.mute !== undefined) state.master.mute = m.mute?1:0;
       break;
+    case 'strip': stripData(m); break;
+    case 'stripClosed': stripClose(false); break;
     case 'denied':   // someone else holds this mix: back to the picker
-      localStorage.removeItem(LS.identity); state.mixId = null;
+      setIdentity(''); state.mixId = null;
       showToast(t('taken'));
       delete $('mix').dataset.sig; updateUI();
       break;
     case 'released': // our mix was taken over by another performer
-      localStorage.removeItem(LS.identity); state.mixId = null;
+      setIdentity(''); state.mixId = null;
       showToast(t('takenOver'));
       delete $('mix').dataset.sig; updateUI();
       break;
@@ -747,7 +880,7 @@ setInterval(checkConn, 400);
 function $(id){return document.getElementById(id);}
 const wideMq = window.matchMedia('(min-width: 700px)');
 function getLayoutPref(){return localStorage.getItem(LS.layout) || 'auto';}
-function getStickyPref(){return localStorage.getItem(LS.sticky) === '1';}
+function getStickyPref(){return localStorage.getItem(LS.sticky) !== '0';}
 function isWide(){
   const pref = getLayoutPref();
   if (pref === 'iphone') return false;
@@ -788,7 +921,7 @@ function renderPin(){
     const v = $('pinInput').value.trim();
     if (!v) return;
     state.pendingPin = v;
-    wsSend({t:'hello', pin:v});
+    wsSend({t:'hello', pin:v, performer: TOKEN || undefined});
   };
 }
 
@@ -821,7 +954,7 @@ function renderIntro(){
 }
 
 function chooseMix(id, force){
-  localStorage.setItem(LS.identity, id);
+  setIdentity(id);
   state.mixId = id;
   const mix = state.mixes.find(x=>x.id===id);
   state.selName = mix ? mix.label : id;
@@ -835,6 +968,16 @@ function renderMix(){
   $('intro').classList.add('hidden');
   root.classList.remove('hidden');
 
+  $('hint').textContent = '';
+  if (TOKEN && state.link && state.link !== 'ok'){
+    root.classList.remove('wide');
+    const key = state.link === 'unknown' ? 'linkUnknown' : 'linkNoOutput';
+    if (root.dataset.state !== key){
+      root.innerHTML = '<div class="loading">' + escapeHtml(t(key)) + '</div>';
+      root.dataset.state = key;
+    }
+    return;
+  }
   if (!state.mixes.length){
     root.classList.remove('wide');
     if (root.dataset.state !== 'loading'){
@@ -845,7 +988,7 @@ function renderMix(){
     }
     return;
   }
-  const want = localStorage.getItem(LS.identity);
+  const want = identity();
   const mix = state.mixes.find(x=>x.id===want);
   if (!mix){
     root.classList.remove('wide');
@@ -860,11 +1003,15 @@ function renderMix(){
   delete root.dataset.state;
   root.classList.toggle('wide', isWide());
   root.classList.toggle('sticky-master', getStickyPref());
-  $('whoBox').textContent = mix.label;
+  { // Name, then role and output for a performer.
+    const sub = [mix.role, mix.out].filter(Boolean).join(' · ');
+    const who = escapeHtml(mix.label) + (sub ? '<small>' + escapeHtml(sub) + '</small>' : '');
+    if ($('whoBox').dataset.w !== who){ $('whoBox').dataset.w = who; $('whoBox').innerHTML = who; }
+  }
 
   const recvCnt = state.sources.length;
-  let sig = 'M';
-  for (const s of state.sources) sig += '|'+s.id;
+  let sig = 'M' + (state.master.shown === false ? '0' : '') + ':' + (state.master.eq||0) + (state.master.dyn||0) + (state.master.al||0);
+  for (const s of state.sources) sig += '|'+s.id+':'+(s.eq||0)+(s.dyn||0)+(s.fx||0);
   if (root.dataset.sig !== sig){
     root.dataset.sig = sig;
     root.innerHTML = '';
@@ -873,8 +1020,44 @@ function renderMix(){
   }
   updateCard(root.querySelector('[data-send="0"]'), {master:true});
   for (let y=1;y<=recvCnt;y++) updateCard(root.querySelector('[data-send="'+(-y)+'"]'), {recv:y});
+  updateHint();
 }
 
+// ⇨ MORE FADERS TO THE RIGHT: the strips scroll sideways, and a phone gives no
+// other sign of it.
+function updateHint(){
+  const root = $('mix');
+  let text = '';
+  if (root.classList.contains('wide')){
+    const card = root.querySelector('.card:not(.master)');
+    const w = card ? card.offsetWidth + 8 : 1;
+    const hidden = Math.ceil((root.scrollWidth - root.clientWidth - root.scrollLeft - 2) / w);
+    if (hidden > 0) text = t('swipe')(hidden);
+  }
+  if ($('hint').textContent !== text) $('hint').textContent = text;
+}
+$('mix').addEventListener('scroll', updateHint);
+
+// dB marks beside a strip's fader, where the fader's own curve puts them.
+function faderTicks(sendId){
+  const max = srcMax(sendId);
+  let o = '';
+  for (const db of [6,0,-6,-12,-24,-40]){
+    if (db > max) continue;
+    o += '<span class="tick" style="bottom:'+(dbToPos(db)*100)+'%">'+(db>0?'+':'')+db+'</span>';
+  }
+  return o;
+}
+// EQ, DYN and FX send appear when the sound engineer gave them and the channel has them.
+function stripKeysHtml(sendId){
+  const m = sendId === 0 ? state.master : state.sources[-sendId-1];
+  if (!m) return '';
+  let keys = '';
+  if (m.eq) keys += '<button data-strip="eq">EQ</button>';
+  if (m.dyn || m.al) keys += '<button data-strip="dyn">DYN</button>';
+  return (keys ? '<div class="keys">'+keys+'</div>' : '')
+       + (m.fx ? '<div class="fxb"><div class="ff"></div><div class="ft"></div><span>FX</span></div>' : '');
+}
 function buildCard(opts){
   const isMaster = !!opts.master;
   const sendId = isMaster ? 0 : -opts.recv;
@@ -891,9 +1074,11 @@ function buildCard(opts){
       '<div class="fm"></div>'+
       '<div class="nick" data-nick="0db"></div>'+
       '<div class="meter v"></div>'+
+      faderTicks(sendId)+
       '<div class="thumb"></div>'+
     '</div>'+
     '<div class="meter h"></div>'+
+    stripKeysHtml(sendId)+
     (isMaster ? '' :
       '<div class="ctrl">'+
         '<div class="pan"><span class="plabel l">L</span><span class="center"></span><div class="pthumb"></div><span class="plabel r">R</span></div>'+
@@ -910,6 +1095,9 @@ function buildCard(opts){
     wireSlider(card.querySelector('.pan'), sendId, 'pan');
   }
   card.querySelectorAll('[data-act="mute"]').forEach(b=>b.addEventListener('click', ()=>toggleMute(sendId)));
+  card.querySelectorAll('[data-strip]').forEach(b=>b.addEventListener('click', ()=>stripOpen(sendId, b.dataset.strip)));
+  if (card.querySelector('.fxb')) wireSlider(card.querySelector('.fxb'), sendId, 'fx');
+  if (isMaster && state.master.shown === false) card.classList.add('nomaster');
   const solo = card.querySelector('[data-act="solo"]');
   if (solo) solo.addEventListener('click', ()=>toggleSolo(-sendId));
   return card;
@@ -930,6 +1118,13 @@ function updateCard(card, opts){
     col = (s && s.color) || '#0099FF';
   }
   card.querySelector('.name').textContent = name;
+  const fxb = card.querySelector('.fxb');
+  if (fxb && !isMaster){
+    const r = state.recvs[opts.recv-1];
+    const pc = Math.max(0, Math.min(100, ((r.fx != null ? r.fx : -65) + 65) / 71 * 100));
+    fxb.querySelector('.ff').style.width = pc+'%';
+    fxb.querySelector('.ft').style.left = 'calc(5px + (100% - 10px) * '+(pc/100)+')';
+  }
   const db = ampToDb(vol);
   const dbEl = card.querySelector('.db');
   dbEl.textContent = fmtDb(db);
@@ -1029,6 +1224,15 @@ function wireSlider(el, sendId, kind){
     if (state.dragSend === sendId && state.dragKind === kind){
       handleDrag(el, e, sendId, kind, true);
       state.dragSend = null; state.dragKind = null;
+    } else if (pend && pend.id === e.pointerId && kind !== 'fx'){
+      // ⇨ A DOUBLE TAP RESETS: a source to 0 dB, a pan to centre. Not the own
+      // output: 0 dB out of nowhere, on the ears.
+      const now = Date.now();
+      if (el._tap && now - el._tap < 350){
+        el._tap = 0;
+        if (kind === 'pan') applyPan(sendId, 0, true);
+        else if (sendId !== 0) applyVol(sendId, 1, true);
+      } else el._tap = now;
     }
     if (pend && pend.id === e.pointerId) pend = null;
   });
@@ -1043,6 +1247,15 @@ function wireSlider(el, sendId, kind){
 const PAN_THROW = 150;
 function handleDrag(el, e, sendId, kind, isEnd){
   const r = el.getBoundingClientRect();
+  if (kind === 'fx'){
+    const db = -65 + Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * 71;
+    const i = -sendId-1;
+    if (state.recvs[i]) state.recvs[i].fx = db;
+    const s = state.sources[i];
+    if (s && state.mixId) wsSend({t:'strip', mix:state.mixId, target:s.id, param:'fxsend', val:db});
+    refreshCard(sendId);
+    return;
+  }
   if (kind === 'pan' && isWide()){
     const ref = state.panRef || {y:e.clientY, pan:0};
     let pan = ref.pan + (ref.y - e.clientY) / PAN_THROW;
@@ -1150,8 +1363,8 @@ $('gearBtn').addEventListener('click', openSettings);
 $('setCancel').addEventListener('click', ()=>$('overlay').classList.remove('open'));
 $('setSave').addEventListener('click', ()=>{
   const id = $('setTrack').value;
-  if (id){
-    localStorage.setItem(LS.identity, id);
+  if (id && !TOKEN){
+    setIdentity(id);
     const mix = state.mixes.find(x=>x.id===id);
     state.mixId = id;
     state.selName = mix ? mix.label : id;
@@ -1177,7 +1390,8 @@ $('setSave').addEventListener('click', ()=>{
 });
 $('setReset').addEventListener('click', ()=>{
   if (confirm(t('forget'))){
-    localStorage.removeItem(LS.identity);
+    setIdentity('');
+    if (TOKEN) localStorage.removeItem(mineKey());
     location.reload();
   }
 });
@@ -1190,6 +1404,9 @@ function openSettings(){
     if (m.id === state.mixId) opt.selected = true;
     sel.appendChild(opt);
   }
+  $('setTrack').classList.toggle('hidden', !!TOKEN);
+  $('setTrackLabel').classList.toggle('hidden', !!TOKEN);
+  drawMine();
   $('setLayout').value = getLayoutPref();
   $('setSticky').value = getStickyPref() ? '1' : '0';
   $('setMeters').value = meterPref();
@@ -1200,13 +1417,330 @@ function openSettings(){
 // ---- MAIN LOOP ----
 function updateUI(){
   if (state.needPin){ renderPin(); return; }
-  const who = localStorage.getItem(LS.identity);
+  const who = identity();
   if (!who){ renderIntro(); return; }
   renderMix();
 }
 
+// ---- MY FADERS: hidden and sorted on this phone, if the sound engineer allows ----
+function mineKey(){ return 'moreme.mine.' + (TOKEN || identity() || ''); }
+function mineGet(){
+  try { const v = JSON.parse(localStorage.getItem(mineKey()) || '{}'); return { hid: v.hid || [], ord: v.ord || [] }; }
+  catch(_) { return { hid: [], ord: [] }; }
+}
+function mineOrdered(list){
+  const my = mineGet();
+  const at = s => { const k = my.ord.indexOf(s.id); return k < 0 ? 1e6 : k; };
+  return list.map((s,i)=>({s,i})).sort((a,b)=>at(a.s)-at(b.s) || a.i-b.i).map(x=>x.s);
+}
+function applyMine(list){
+  if (!state.mayHide || PREVIEW) return list.slice();
+  const my = mineGet();
+  return mineOrdered(list).filter(s=>!my.hid.includes(s.id));
+}
+function mineSave(my){
+  localStorage.setItem(mineKey(), JSON.stringify(my));
+  drawMine();
+  // The list decides which values arrive: a fresh snapshot, shown or not.
+  if (state.mixId) wsSend({t:'select', mix:state.mixId});
+}
+function drawMine(){
+  const box = $('myBox');
+  const on = state.mayHide && !PREVIEW;
+  box.classList.toggle('hidden', !on);
+  if (!on) return;
+  const my = mineGet(), list = mineOrdered(state.allSources || []);
+  $('myList').innerHTML = list.map((s,k)=>{
+    const off = my.hid.includes(s.id);
+    return '<div class="my'+(off?' off':'')+'"><span class="sw" style="background:'+escapeHtml(s.color)+'"></span><span class="n">'+escapeHtml(s.label)+'</span>'
+         + '<button data-eye="'+escapeHtml(s.id)+'">'+escapeHtml(t(off?'show':'hide'))+'</button>'
+         + '<button data-mv="'+k+':-1" aria-label="up">↑</button><button data-mv="'+k+':1" aria-label="down">↓</button></div>';
+  }).join('');
+  $('myList').querySelectorAll('[data-eye]').forEach(b=>b.onclick=()=>{
+    const id = b.dataset.eye, m = mineGet();
+    m.hid = m.hid.includes(id) ? m.hid.filter(x=>x!==id) : m.hid.concat(id);
+    mineSave(m);
+  });
+  $('myList').querySelectorAll('[data-mv]').forEach(b=>b.onclick=()=>{
+    const [k,d] = b.dataset.mv.split(':').map(Number), j = k+d;
+    if (j < 0 || j >= list.length) return;
+    const ids = list.map(s=>s.id);
+    [ids[k], ids[j]] = [ids[j], ids[k]];
+    const m = mineGet(); m.ord = ids;
+    mineSave(m);
+  });
+}
+
+// ---- LIGHT OR DARK ----
+function applyTheme(){ document.body.classList.toggle('light', localStorage.getItem(LS.theme) === 'light'); }
+$('moonBtn').addEventListener('click', ()=>{
+  localStorage.setItem(LS.theme, document.body.classList.contains('light') ? 'dark' : 'light');
+  applyTheme();
+});
+
+// ---- EQ AND DYNAMICS: one page per target, ORC sends values and the curve ----
+const strip = { target:null, sendId:null, tab:'eq', data:null, drag:null, band:1 };
+function stripTitle(){
+  if (strip.sendId === 0) return t('ownOutput');
+  const s = state.sources[-strip.sendId-1];
+  return s ? s.label : '';
+}
+function stripOpen(sendId, tab){
+  if (!state.mixId) return;
+  const s = sendId === 0 ? null : state.sources[-sendId-1];
+  strip.sendId = sendId; strip.tab = tab; strip.data = null;
+  strip.target = sendId === 0 ? 'm' : (s && s.id);
+  if (!strip.target) return;
+  wsSend({t:'stripOpen', mix:state.mixId, target:strip.target});
+  $('stripBack').textContent = '‹ ' + t('back');
+  $('stripName').textContent = stripTitle();
+  $('stripBody').innerHTML = '';
+  $('strip').classList.add('open');
+}
+function stripClose(tell){
+  if (tell !== false && state.mixId) wsSend({t:'stripClose', mix:state.mixId});
+  strip.target = null;
+  $('strip').classList.remove('open');
+}
+$('stripBack').addEventListener('click', ()=>stripClose());
+function stripData(m){
+  if (m.target !== strip.target) return;
+  strip.data = m;
+  if (strip.drag) { if (strip.tab === 'eq') drawCurveOnly(); return; }   // a finger is on it: no rebuild
+  drawStrip();
+}
+function V(id){ const d = strip.data && strip.data.vals[id]; return d ? d.v : null; }
+function has(id){ return !!(strip.data && strip.data.vals[id]); }
+function setParam(id, v){
+  const d = strip.data.vals[id];
+  if (d) d.v = v;
+  wsSend({t:'strip', mix:state.mixId, target:strip.target, param:id, val:v});
+}
+function fmt(id, v, unit){
+  if (unit === 'Hz') return v >= 1000 ? (v/1000).toFixed(v>=10000?1:2)+' kHz' : Math.round(v)+' Hz';
+  if (unit === 'dB') return (v>0?'+':'')+v.toFixed(1)+' dB';
+  if (unit === 'ms') return Math.round(v)+' ms';
+  if (unit === 's')  return v.toFixed(1)+' s';
+  if (unit === ':1') return v.toFixed(1)+':1';
+  return v.toFixed(1);
+}
+function slider(id, label, unit, log){
+  if (!has(id)) return null;
+  const d = strip.data.vals[id];
+  const toP = v => log ? Math.log(v/d.lo)/Math.log(d.hi/d.lo) : (v-d.lo)/(d.hi-d.lo);
+  const toV = p => log ? d.lo*Math.pow(d.hi/d.lo,p) : d.lo+(d.hi-d.lo)*p;
+  const el = document.createElement('div');
+  el.className = 'sl';
+  el.innerHTML = '<div class="h"><span>'+escapeHtml(label)+'</span><b></b></div><div class="t"><i></i><u></u></div>';
+  const tr = el.querySelector('.t');
+  const paint = v => {
+    const p = Math.max(0, Math.min(1, toP(v)));
+    el.querySelector('b').textContent = fmt(id, v, unit);
+    el.querySelector('i').style.width = (p*100)+'%';
+    el.querySelector('u').style.left = 'calc(12px + (100% - 24px) * '+p+')';
+  };
+  paint(d.v);
+  const go = e => {
+    const r = tr.getBoundingClientRect();
+    const v = toV(Math.max(0, Math.min(1, (e.clientX-r.left-12)/(r.width-24))));
+    paint(v); setParam(id, v);
+    if (strip.tab === 'eq') drawCurveOnly(); else drawDynCurve();
+  };
+  tr.onpointerdown = e => { tr.setPointerCapture(e.pointerId); strip.drag = id; go(e); tr.onpointermove = go; };
+  tr.onpointerup = tr.onpointercancel = () => { tr.onpointermove = null; strip.drag = null; };
+  return el;
+}
+function toggle(id, label){
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.className = V(id) >= 0.5 ? 'on' : '';
+  b.onclick = () => { setParam(id, V(id) >= 0.5 ? 0 : 1); b.className = V(id) >= 0.5 ? 'on' : ''; };
+  return b;
+}
+function group(label, onId){
+  const g = document.createElement('div');
+  g.className = 'grp';
+  g.innerHTML = '<span>'+escapeHtml(label)+'</span>';
+  if (onId && has(onId)) g.appendChild(toggle(onId, t('on')));
+  return g;
+}
+function drawStrip(){
+  const m = strip.data, body = $('stripBody');
+  if (!m) return;
+  const canEq = m.eq > 0, canDyn = m.dyn > 0 || m.al > 0;
+  if (strip.tab === 'eq' && !canEq) strip.tab = 'dyn';
+  if (strip.tab === 'dyn' && !canDyn) strip.tab = 'eq';
+  const tabs = $('stripTabs');
+  tabs.innerHTML = '';
+  if (canEq && canDyn){
+    for (const [k,l] of [['eq','EQ'],['dyn','DYN']]){
+      const b = document.createElement('button');
+      b.textContent = l;
+      b.className = strip.tab === k ? 'on' : '';
+      b.onclick = () => { strip.tab = k; drawStrip(); };
+      tabs.appendChild(b);
+    }
+  }
+  const keep = body.scrollTop;
+  body.innerHTML = '';
+  if (strip.tab === 'eq') drawEq(body, m); else drawDyn(body, m);
+  body.scrollTop = keep;
+}
+// ---- EQ ----
+const EQ_W = 640, EQ_H = 260;
+const eqX = f => Math.log(f/20)/Math.log(1000)*EQ_W;
+const eqF = x => 20*Math.pow(1000, x/EQ_W);
+const eqY = db => EQ_H/2 - db/24*EQ_H;
+const eqDb = y => (EQ_H/2 - y)/EQ_H*24;
+function drawEq(body, m){
+  const by = document.createElement('div');
+  by.className = 'seg2';
+  if (has('eq_on')){
+    const b = toggle('eq_on', t('on'));
+    by.appendChild(b);
+    body.appendChild(by);
+  }
+  if (m.eq === 1){
+    const a = slider('b1gain', t('bass'), 'dB'), b = slider('b2gain', t('mid'), 'dB'), c = slider('b3gain', t('treble'), 'dB');
+    [a,b,c].forEach(x=>x&&body.appendChild(x));
+    return;
+  }
+  const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('viewBox','0 0 '+EQ_W+' '+EQ_H);
+  svg.id = 'eqSvg';
+  body.appendChild(svg);
+  drawCurveOnly();
+  const seg = document.createElement('div');
+  seg.className = 'seg2';
+  [[1,t('bass')],[2,t('mid')],[3,t('treble')]].forEach(([n,l])=>{
+    const b = document.createElement('button');
+    b.textContent = l;
+    b.className = strip.band === n ? 'on' : '';
+    b.onclick = () => { strip.band = n; drawStrip(); };
+    seg.appendChild(b);
+  });
+  body.appendChild(seg);
+  const n = strip.band;
+  [slider('b'+n+'gain','Gain','dB'), slider('b'+n+'freq','Freq','Hz',true), slider('b'+n+'q','Q','')].forEach(x=>x&&body.appendChild(x));
+  if (has('lc_on')){
+    body.appendChild(group(t('lowCut'), 'lc_on'));
+    const f = slider('lc_freq','Freq','Hz',true);
+    if (f) body.appendChild(f);
+  }
+}
+function drawCurveOnly(){
+  const svg = document.getElementById('eqSvg');
+  if (!svg || !strip.data) return;
+  const c = strip.data.curve || [];
+  const css = getComputedStyle(document.body);
+  const grid = css.getPropertyValue('--bg3'), txt = css.getPropertyValue('--fg3');
+  let o = '';
+  for (const f of [100,1000,10000]) o += '<line x1="'+eqX(f)+'" x2="'+eqX(f)+'" y1="0" y2="'+EQ_H+'" stroke="'+grid+'"/><text x="'+(eqX(f)+4)+'" y="'+(EQ_H-6)+'" font-size="14" fill="'+txt+'">'+(f>=1000?f/1000+'k':f)+'</text>';
+  for (const d of [-6,0,6]) o += '<line x1="0" x2="'+EQ_W+'" y1="'+eqY(d)+'" y2="'+eqY(d)+'" stroke="'+grid+'"/>';
+  const pts = c.map((db,i)=>(i/(c.length-1)*EQ_W).toFixed(1)+','+eqY(db).toFixed(1)).join(' ');
+  o += '<polyline points="'+pts+'" fill="none" stroke="#0099FF" stroke-width="3"/>';
+  const on = V('eq_on') >= 0.5;
+  [1,2,3].forEach(n=>{
+    const f = V('b'+n+'freq'), g = V('b'+n+'gain');
+    if (f == null || g == null) return;
+    o += '<circle data-band="'+n+'" cx="'+eqX(f)+'" cy="'+eqY(g)+'" r="'+(strip.band===n?15:12)+'" fill="'+(strip.band===n?'#fff':'#9a9a9a')+'" opacity="'+(on?1:.4)+'"/>';
+  });
+  svg.innerHTML = o;
+  svg.onpointerdown = e => {
+    const r = svg.getBoundingClientRect();
+    const sx = (e.clientX-r.left)/r.width*EQ_W, sy = (e.clientY-r.top)/r.height*EQ_H;
+    let best = 0, dist = 1e9;
+    [1,2,3].forEach(n=>{
+      const f = V('b'+n+'freq'), g = V('b'+n+'gain');
+      if (f == null || g == null) return;
+      const d = Math.hypot(eqX(f)-sx, eqY(g)-sy);
+      if (d < dist){ dist = d; best = n; }
+    });
+    if (!best) return;
+    if (best !== strip.band){ strip.band = best; }
+    svg.setPointerCapture(e.pointerId);
+    strip.drag = 'band';
+    const go = ev => {
+      const x = Math.max(0, Math.min(EQ_W, (ev.clientX-r.left)/r.width*EQ_W));
+      const y = Math.max(0, Math.min(EQ_H, (ev.clientY-r.top)/r.height*EQ_H));
+      const n = strip.band;
+      setParam('b'+n+'freq', Math.max(strip.data.vals['b'+n+'freq'].lo, Math.min(strip.data.vals['b'+n+'freq'].hi, eqF(x))));
+      setParam('b'+n+'gain', Math.max(strip.data.vals['b'+n+'gain'].lo, Math.min(strip.data.vals['b'+n+'gain'].hi, eqDb(y))));
+      drawCurveOnly();
+    };
+    svg.onpointermove = go;
+    svg.onpointerup = svg.onpointercancel = () => { svg.onpointermove = null; strip.drag = null; drawStrip(); };
+  };
+}
+// ---- DYNAMICS ----
+function drawDynCurve(){
+  const svg = document.getElementById('dynSvg');
+  if (!svg) return;
+  const W = 300, H = 300, X = d => (d+60)/60*W, Y = d => H-(d+60)/60*H;
+  const th = V('compthres'), ra = V('compratio'), et = V('expthres'), er = V('expratio'), gain = V('dyngain') || 0;
+  const css = getComputedStyle(document.body);
+  const grid = css.getPropertyValue('--bg3');
+  let o = '';
+  for (const d of [-48,-36,-24,-12]) o += '<line x1="'+X(d)+'" x2="'+X(d)+'" y1="0" y2="'+H+'" stroke="'+grid+'"/><line y1="'+Y(d)+'" y2="'+Y(d)+'" x1="0" x2="'+W+'" stroke="'+grid+'"/>';
+  const out = i => {
+    let v = i;
+    if (th != null && ra != null && i > th) v = th + (i-th)/Math.max(ra,1);
+    if (et != null && er != null && i < et) v = et + (i-et)*Math.max(er,1);
+    return v + gain;
+  };
+  let pts = '';
+  for (let i = -60; i <= 0; i += 1) pts += X(i).toFixed(1)+','+Y(Math.max(-60,Math.min(0,out(i)))).toFixed(1)+' ';
+  o += '<polyline points="'+pts+'" fill="none" stroke="#0099FF" stroke-width="3"/>';
+  if (th != null) o += '<circle cx="'+X(th)+'" cy="'+Y(Math.max(-60,Math.min(0,out(th))))+'" r="9" fill="#fff"/>';
+  svg.innerHTML = o;
+}
+function drawDyn(body, m){
+  if (m.dyn === 1){
+    // Simple: one amount. All the way up is -40 dB at 4:1.
+    if (has('dyn_on')){ const s = document.createElement('div'); s.className = 'seg2'; s.appendChild(toggle('dyn_on', t('on'))); body.appendChild(s); }
+    const el = document.createElement('div');
+    el.className = 'sl';
+    el.innerHTML = '<div class="h"><span>'+escapeHtml(t('compression'))+'</span><b></b></div><div class="t"><i></i><u></u></div>';
+    const tr = el.querySelector('.t');
+    const paint = p => {
+      el.querySelector('b').textContent = Math.round(p*100)+'%';
+      el.querySelector('i').style.width = (p*100)+'%';
+      el.querySelector('u').style.left = 'calc(12px + (100% - 24px) * '+p+')';
+    };
+    paint(Math.max(0, Math.min(1, -(V('compthres')||0)/40)));
+    const go = e => {
+      const r = tr.getBoundingClientRect();
+      const p = Math.max(0, Math.min(1, (e.clientX-r.left-12)/(r.width-24)));
+      paint(p);
+      setParam('compthres', -40*p);
+      setParam('compratio', 1+3*p);
+    };
+    tr.onpointerdown = e => { tr.setPointerCapture(e.pointerId); strip.drag = 'simple'; go(e); tr.onpointermove = go; };
+    tr.onpointerup = tr.onpointercancel = () => { tr.onpointermove = null; strip.drag = null; };
+    body.appendChild(el);
+    const v = slider('dyngain', t('volume'), 'dB');
+    if (v) body.appendChild(v);
+  } else if (m.dyn === 2){
+    const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('viewBox','0 0 300 300');
+    svg.id = 'dynSvg';
+    svg.style.maxWidth = '320px';
+    body.appendChild(svg);
+    drawDynCurve();
+    body.appendChild(group('Compressor', 'dyn_on'));
+    [slider('compthres','Threshold','dB'), slider('compratio','Ratio',':1'), slider('attack','Attack','ms'), slider('release','Release','ms'), slider('dyngain','Gain','dB')].forEach(x=>x&&body.appendChild(x));
+    body.appendChild(group('Expander'));
+    [slider('expthres','Threshold','dB'), slider('expratio','Ratio',':1')].forEach(x=>x&&body.appendChild(x));
+  }
+  if (m.al > 0){
+    body.appendChild(group('Auto Level', 'al_on'));
+    [slider('maxgain','Max Gain','dB'), slider('headroom','Headroom','dB'), slider('risetime','Rise Time','s')].forEach(x=>x&&body.appendChild(x));
+  }
+}
+
 function init(){
   applyLanguage();
+  applyTheme();
   $('mix').classList.toggle('meters-off', !metersOn());
   $('mix').classList.toggle('meters-fader', meterPref() === '2');
   $('verLabel').textContent = 'MoreMe · ORC ' + (VERSION || '') + (STUDIO ? ' · ' + STUDIO : '');

@@ -821,8 +821,9 @@ if(NOT WIN32)
 
     # ORC MoreMe, the headphone mixer in the browser (docs/orc-phones-plan.md,
     # stage 1): stoerme's protocol, the lock, the mute, the rounds, the PIN.
-    add_executable(test_orc_phones tests/test_orc_phones.cpp orc/Phones.cpp
+    add_executable(test_orc_phones tests/test_orc_phones.cpp orc/Phones.cpp orc/Performers.cpp
         src/RmeState.cpp src/RmeOsc.cpp src/RmeManager.cpp src/RmeNames.cpp
+        src/RmeUf1.cpp src/RmeStrip.cpp src/Uf1EqCurve.cpp
         src/Sha256.cpp src/LogPath.cpp)
     target_include_directories(test_orc_phones PRIVATE src orc "${WDL_DIR}")
     target_link_libraries(test_orc_phones PRIVATE Threads::Threads)
@@ -836,8 +837,9 @@ if(NOT WIN32)
     # hands the test (stages 2 and 3). macOS only, as ORC.
     if(APPLE)
         add_executable(test_orc_phones_server tests/test_orc_phones_server.cpp
-            orc/PhonesServer.cpp orc/Phones.cpp orc/WebSocket.cpp orc/OrcConfig.cpp
+            orc/PhonesServer.cpp orc/Phones.cpp orc/Performers.cpp orc/WebSocket.cpp orc/OrcConfig.cpp
             src/RmeState.cpp src/RmeOsc.cpp src/RmeManager.cpp src/RmeNames.cpp
+            src/RmeUf1.cpp src/RmeStrip.cpp src/Uf1EqCurve.cpp
             src/Sha256.cpp src/LogPath.cpp "${WDL_DIR}/WDL/sha.cpp")
         target_include_directories(test_orc_phones_server PRIVATE src orc "${WDL_DIR}")
         target_link_libraries(test_orc_phones_server PRIVATE Threads::Threads
@@ -1258,9 +1260,11 @@ if(APPLE)
         # ORC MoreMe, the headphone mixer in the browser (docs/orc-phones-plan.md):
         # the mixer's logic, the WebSocket codec, the server and its page.
         orc/Phones.cpp
+        orc/Performers.cpp
         orc/WebSocket.cpp
         orc/PhonesServer.cpp
         orc/OrcPhonesTab.mm
+        orc/OrcDeskWindow.mm
         "${WDL_DIR}/WDL/sha.cpp"
         "${CMAKE_BINARY_DIR}/ORC.icns"
         ${ORC_SHARED_SOURCES})
@@ -1285,6 +1289,7 @@ if(APPLE)
         orc/OrcSettingsWindow.mm
         orc/OrcModesTab.mm
         orc/OrcPhonesTab.mm
+        orc/OrcDeskWindow.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     # WDL only for its JSON parser, which RmeManager reads rme.json with. No
     # REAPER header comes in with it: WDL is a standalone utility library.
@@ -1331,7 +1336,7 @@ if(APPLE)
     add_dependencies(orc orc_libusb)
     target_include_directories(orc PRIVATE "${ORC_LIBUSB_PREFIX}/install/include/libusb-1.0")
     target_link_libraries(orc PRIVATE "${ORC_LIBUSB_DYLIB}" Threads::Threads
-        "-framework AppKit" "-framework ServiceManagement" "-framework CoreImage"
+        "-framework AppKit" "-framework ServiceManagement" "-framework CoreImage" "-framework WebKit"
         "-framework UniformTypeIdentifiers")
     # ⇨ A BUNDLE, because a status item needs one. An unbundled binary can put
     # an item in the menu bar, but it has no Info.plist to carry LSUIElement, no
@@ -1376,6 +1381,7 @@ if(APPLE)
             "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Resources/moreme"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/orc/moreme/moreme.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/orc/moreme/desk.html"
             "${CMAKE_CURRENT_SOURCE_DIR}/orc/moreme/moreme-logo.svg"
             "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Resources/moreme/"
         COMMAND codesign --force --sign -

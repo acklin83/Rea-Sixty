@@ -1,6 +1,6 @@
 # MoreMe: Performer und Studio Control, Plan
 
-Frank 03.11.2026, angenommen mit allen Vorschlägen. Gebaut wird nach seinen Tests und dem nächsten ORC-Release, vor ORC für Windows.
+Frank 03.11.2026, angenommen mit allen Vorschlägen. Gebaut 03.11. (Frank: kommt ins selbe Release wie die Submix-Tasten), vor ORC für Windows.
 
 ## Ziel
 Jeder Musiker bekommt sein eigenes Layout: eigener Ausgang, eigene Fader, eigene Freigaben, eigener Link. Der Tontechniker richtet das auf einer Seite ein.
@@ -22,7 +22,7 @@ Jeder Musiker bekommt sein eigenes Layout: eigener Ausgang, eigene Fader, eigene
 
 ## Stufen
 1. Performer und Studio Control.
-   - Performer: Name, Rolle, Ausgang (Rolle oder fester Ausgang, `rmeu::keyOutput`), Fader (TotalMix-Layout oder eigene Liste: Quelle Input oder Playback mit TotalMix-Namen, Name und Farbe vorbelegt aus TotalMix und änderbar, Reihenfolge), Master an/aus, Freigaben, Link-Kennung. Gespeichert in `moreme.json`.
+   - Performer: Name, Rolle, Ausgang (Rolle oder fester Ausgang, `rmeu::keyOutput`), Fader (TotalMix-Layout oder eigene Liste: Quelle Input oder Playback mit TotalMix-Namen, Name und Farbe vorbelegt aus TotalMix und änderbar, Reihenfolge), Master an/aus, Freigaben, Link-Kennung. Gespeichert in `moreme-performers.json`, damit nur der Server-Thread diese Datei schreibt und der Reiter MoreMe (`moreme.json`) nie dagegen läuft.
    - Seite in drei Spalten: Performer, Einstellungen, QR und Link (Kopieren, Teilen, Vorschau). Oben Snapshots: New, Save, Save as.
    - Performer-Liste mit Kurzstatus: Ausgang, Anzahl Fader oder TotalMix-Layout, EQ- und DYN-Stufe.
    - Fader sortieren mit Pfeilen hoch und runter, das geht auch auf dem Tablet.

@@ -4,6 +4,7 @@
 #include "OrcConfig.h"
 #include "OrcHandover.h"
 #include "OrcLog.h"
+#include "Performers.h"
 #include "Phones.h"
 #include "WebSocket.h"
 
@@ -35,6 +36,8 @@ namespace rme = reasixty::rme;
 
 std::string settingsPath() { return orc::supportDir() + "/moreme.json"; }
 static std::string pinPath() { return orc::supportDir() + "/moreme.pin"; }
+static std::string deskPinPath() { return orc::supportDir() + "/moreme.deskpin"; }
+std::string performersPath() { return orc::supportDir() + "/moreme-performers.json"; }
 
 namespace {
 
@@ -121,16 +124,15 @@ bool saveSettings(const Settings& s)
     return orc_handover::writeFile(settingsPath(), json);
 }
 
-std::string loadPin()
+static std::string readPinFile(const std::string& path)
 {
-    std::string p = orc_handover::readFile(pinPath());
+    std::string p = orc_handover::readFile(path);
     while (!p.empty() && (p.back() == '\n' || p.back() == '\r' || p.back() == ' ')) p.pop_back();
     return p;
 }
 
-bool savePin(const std::string& pin)
+static bool writePinFile(const std::string& path, const std::string& pin)
 {
-    const std::string path = pinPath();
     // Readable by the user only, before anything is in it.
     const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) return false;
@@ -140,6 +142,11 @@ bool savePin(const std::string& pin)
     ::close(fd);
     return ok;
 }
+
+std::string loadPin() { return readPinFile(pinPath()); }
+bool savePin(const std::string& pin) { return writePinFile(pinPath(), pin); }
+std::string loadDeskPin() { return readPinFile(deskPinPath()); }
+bool saveDeskPin(const std::string& pin) { return writePinFile(deskPinPath(), pin); }
 
 std::string generatePin()
 {
@@ -225,11 +232,17 @@ void replaceOnce(std::string& s, const std::string& what, const std::string& wit
     if (at != std::string::npos) s.replace(at, what.size(), with);
 }
 
-std::string serve(const ws::Request& r, const Settings& s, const std::string& res)
+std::string serve(const ws::Request& r, const Settings& s, const std::string& res, const std::string& peer)
 {
     if (r.method != "GET" && r.method != "HEAD")
         return ws::response(405, "text/plain; charset=utf-8", "method not allowed");
-    if (r.path == "/" || r.path == "/index.html" || r.path == "/moreme.html") {
+    // ⇨ A PERFORMER'S LINK: the same page, told whose it is.
+    std::string performer;
+    if (r.path.rfind("/p/", 0) == 0) {
+        performer = r.path.substr(3);
+        if (!validToken(performer)) return ws::response(404, "text/plain; charset=utf-8", "not found");
+    }
+    if (r.path == "/" || r.path == "/index.html" || r.path == "/moreme.html" || !performer.empty()) {
         std::string page = orc_handover::readFile(res + "/moreme.html");
         if (page.empty()) return ws::response(404, "text/plain; charset=utf-8", "not found");
         // The studio's name and ORC's version go into two meta tags the page
@@ -238,6 +251,15 @@ std::string serve(const ws::Request& r, const Settings& s, const std::string& re
                     "<meta name=\"moreme-studio\" content=\"" + htmlAttr(s.studio) + "\">");
         replaceOnce(page, "<meta name=\"moreme-version\" content=\"\">",
                     "<meta name=\"moreme-version\" content=\"" + htmlAttr(orcVersion()) + "\">");
+        replaceOnce(page, "<meta name=\"moreme-performer\" content=\"\">",
+                    "<meta name=\"moreme-performer\" content=\"" + performer + "\">");
+        return ws::response(200, "text/html; charset=utf-8", page);
+    }
+    if (r.path == "/desk") {
+        if (!deskAllowed(peer, r.header("x-real-ip"), r.header("x-forwarded-for"), r.header("host"), {}))
+            return ws::response(403, "text/plain; charset=utf-8", "Studio Control answers in the local network only");
+        const std::string page = orc_handover::readFile(res + "/desk.html");
+        if (page.empty()) return ws::response(404, "text/plain; charset=utf-8", "not found");
         return ws::response(200, "text/html; charset=utf-8", page);
     }
     if (r.path == "/logo") {
@@ -271,6 +293,9 @@ struct Conn {
     bool           closing = false;   // close once `out` is sent
     bool           dead    = false;
     int            mixId   = 0;
+    bool           desk    = false;   // Studio Control, not a phone
+    bool           deskOk  = false;   // past its PIN
+    std::string    deskSent;          // the state it was last sent
     ws::Reader     reader;
     std::chrono::steady_clock::time_point lastRx;
 };
@@ -287,12 +312,13 @@ Server& server()
 
 Server::~Server() { stop(); }
 
-void Server::apply(const Settings& s, const std::string& pin)
+void Server::apply(const Settings& s, const std::string& pin, const std::string& deskPin)
 {
     {
         std::lock_guard<std::mutex> lk(mx_);
         want_ = s;
         pin_  = pin;
+        deskPin_ = deskPin;
         ++gen_;
     }
     if (!s.enabled) { stop(); return; }
@@ -324,6 +350,12 @@ std::string Server::pin() const
     return pin_;
 }
 
+std::string Server::deskPin() const
+{
+    std::lock_guard<std::mutex> lk(mx_);
+    return deskPin_;
+}
+
 Status Server::status() const
 {
     std::lock_guard<std::mutex> lk(mx_);
@@ -351,6 +383,13 @@ void Server::loop()
     std::uint32_t gen        = ~0u;
     Settings      cur;
     std::string   curPin;
+    std::string   curDeskPin;
+    PinChecker    deskChecker;
+    std::map<std::string, FailRecord> deskFails;
+    // ⇨ THE PERFORMERS. This thread is the only one that touches them or the file.
+    Book          book;
+    parseBook(orc_handover::readFile(performersPath()), book);
+    mixer.setPerformers(book.performers);
     bool          firstPin   = true;
     std::string   tmHost;
     auto          lastHost   = clock::now() - std::chrono::hours(1);
@@ -428,6 +467,20 @@ void Server::loop()
             c.closing = true;
             return;
         }
+        if (r.path == "/deskws" && ws::isUpgrade(r)) {
+            // ⛔ Local network only, and never through the reverse proxy.
+            if (!deskAllowed(c.peer, r.header("x-real-ip"), r.header("x-forwarded-for"),
+                             r.header("host"), r.header("origin"))) {
+                orc::logLine("MoreMe: Studio Control refused for %s\n", c.peer.c_str());
+                queue(c, ws::response(403, "text/plain; charset=utf-8", "local network only"));
+                c.closing = true;
+                return;
+            }
+            queue(c, ws::upgradeResponse(r));
+            c.ws   = true;
+            c.desk = true;
+            return;
+        }
         if (r.path == "/ws" && ws::isUpgrade(r)) {
             queue(c, ws::upgradeResponse(r));
             c.ws    = true;
@@ -436,10 +489,56 @@ void Server::loop()
             fdOfMix[c.mixId] = c.fd;
             return;
         }
-        std::string resp = serve(r, cur, res);
+        std::string resp = serve(r, cur, res, c.peer);
         if (r.method == "HEAD") resp = resp.substr(0, resp.find("\r\n\r\n") + 4);
         queue(c, resp);
         c.closing = true;
+    };
+    auto deskText = [&](Conn& c, const std::string& text, long long nowMs) {
+        std::string t, pin;
+        {
+            wdl_json_parser jp;
+            const wdl_json_element* root = jp.parse(text.c_str(), static_cast<int>(text.size()));
+            JsonTreeGuard guard{jp, root};
+            if (!root || !root->is_object()) return;
+            if (const char* v = root->get_string_by_name("t")) t = v;
+            if (const char* v = root->get_string_by_name("pin")) pin = v;
+        }
+        if (t == "hello") {
+            const auto rec = [&]() -> const FailRecord* {
+                const auto it = deskFails.find(c.peer);
+                return it == deskFails.end() ? nullptr : &it->second;
+            };
+            long long left = lockLeft(rec(), nowMs);
+            if (!left && !pin.empty() && deskChecker.required()) {
+                if (deskChecker.ok(pin)) {
+                    deskFails.erase(c.peer);
+                    c.deskOk = true;
+                    c.deskSent.clear();
+                    return;
+                }
+                deskFails[c.peer] = afterFail(rec(), nowMs);
+                left = lockLeft(rec(), nowMs);
+                orc::logLine("MoreMe: wrong Studio Control PIN from %s\n", c.peer.c_str());
+            }
+            queue(c, ws::encodeFrame(ws::kText,
+                std::string("{\"t\":\"pin\",\"wrong\":") + ((!pin.empty() && !left) ? "1" : "0")
+                + ",\"wait\":" + std::to_string((left + 999) / 1000) + "}"));
+            return;
+        }
+        if (!c.deskOk) return;
+        // A link is eight of these: hard to guess, short enough to read out.
+        const auto token = [] {
+            static const char k[] = "abcdefghijklmnopqrstuvwxyz0123456789";
+            std::string o;
+            for (int i = 0; i < 8; ++i) o.push_back(k[arc4random_uniform(sizeof(k) - 1)]);
+            return o;
+        };
+        if (applyDesk(book, text, token)) {
+            if (!orc_handover::writeFile(performersPath(), bookJson(book)))
+                orc::logLine("MoreMe: cannot write %s\n", performersPath().c_str());
+            mixer.setPerformers(book.performers);
+        }
     };
     auto onFrames = [&](Conn& c, long long nowMs) {
         for (;;) {
@@ -450,7 +549,10 @@ void Server::loop()
             std::string text;
             switch (c.reader.feed(f, text)) {
                 case ws::Reader::Got::Nothing: break;
-                case ws::Reader::Got::Message: mixer.message(c.mixId, text, nowMs); break;
+                case ws::Reader::Got::Message:
+                    if (c.desk) deskText(c, text, nowMs);
+                    else        mixer.message(c.mixId, text, nowMs);
+                    break;
                 case ws::Reader::Got::Ping:    queue(c, ws::encodeFrame(ws::kPong, text)); break;
                 case ws::Reader::Got::Close:
                     queue(c, ws::encodeFrame(ws::kClose, {}));
@@ -481,6 +583,16 @@ void Server::loop()
                     mixer.setPin(curPin);
                     if (!firstPin) orc::logLine("MoreMe: new PIN, phones asked again\n");
                     firstPin = false;
+                }
+                if (curDeskPin != deskPin_) {
+                    curDeskPin  = deskPin_;
+                    deskChecker = PinChecker(curDeskPin);
+                    deskFails.clear();
+                    for (auto& [fd, c] : conns) {
+                        if (!c.desk || !c.deskOk) continue;
+                        c.deskOk = false;   // whoever had the old one has no new one
+                        queue(c, ws::encodeFrame(ws::kText, R"({"t":"pin","wrong":0,"wait":0})"));
+                    }
                 }
                 if (web) retryAt = now;
                 if (ports) lastHost = now - std::chrono::hours(1);
@@ -573,6 +685,23 @@ void Server::loop()
             // The meters ten times a second: TotalMix sends ~24 a second, and
             // the phone draws the fall in between.
             if (++meterTick % 2 == 0) mixer.meters();
+            // Studio Control: its state, whenever any of it changed.
+            std::string desk;
+            for (auto& [fd, c] : conns) {
+                if (!c.desk || !c.deskOk || c.dead) continue;
+                if (desk.empty()) {
+                    std::string book1 = bookJson(book);
+                    desk = "{\"t\":\"state\",\"book\":" + book1
+                         + ",\"channels\":" + mixer.channelsJson()
+                         + ",\"outputs\":" + outputsJson(st)
+                         + ",\"base\":\"" + pageAddress(cur.webPort) + "\""
+                         + ",\"phonePin\":\"" + curPin + "\""
+                         + ",\"tmSeen\":" + (tmSeen ? "true" : "false") + "}";
+                }
+                if (c.deskSent == desk) continue;
+                c.deskSent = desk;
+                queue(c, ws::encodeFrame(ws::kText, desk));
+            }
         }
         for (auto& [id, json] : mixer.takeOut()) {
             const auto f = fdOfMix.find(id);

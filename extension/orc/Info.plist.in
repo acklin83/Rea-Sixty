@@ -21,5 +21,8 @@
          it. NSApplicationActivationPolicyAccessory in OrcApp.mm says the same
          for a build run straight out of the build directory. -->
     <key>LSUIElement</key>             <true/>
+    <!-- Studio Control's window loads ORC's own page over the loopback. -->
+    <key>NSAppTransportSecurity</key>
+    <dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict>
 </plist>

@@ -461,9 +461,161 @@ int main()
         const int a = mx.open("a");
         mx.message(a, R"({"t":"hello"})", 0);
         auto out = mx.takeOut();
-        EXPECT(to(out, a) == "{\"t\":\"config\",\"version\":\"1\",\"tmSeen\":false,\"mixes\":[]}\n");
+        EXPECT(to(out, a) == "{\"t\":\"config\",\"version\":\"1\",\"tmSeen\":false,\"link\":\"ok\",\"mixes\":[]}\n");
         mx.message(a, R"({"t":"select","mix":"phone1"})", 0);
         EXPECT(mx.takeOut().empty());
+    }
+
+    // ── the performers (docs/moreme-performers-plan.md) ─────────────────────────
+    {
+        namespace ph = orc::phones;
+        // The file: every field there and back, quotes and umlauts whole.
+        ph::Book b;
+        int n = 0;
+        auto token = [&] { return std::string("tok") + static_cast<char>('a' + n++) + "xyz1"; };
+        EXPECT(ph::applyDesk(b, R"({"t":"add"})", token));
+        EXPECT(ph::applyDesk(b, R"({"t":"add"})", token));
+        EXPECT(b.performers.size() == 2 && b.performers[0].output == "phones1" && b.performers[1].output == "phones2");
+        EXPECT(b.performers[0].chanEq == 0 && !b.performers[0].fxSend && !b.performers[0].hide);   // locked from the factory
+        const std::string id = b.performers[0].id;
+        EXPECT(ph::applyDesk(b, R"({"t":"update","id":")" + id + R"J(","performer":{"id":"evilxx","name":"Zo\"é","role":"Lead","output":"phones1","colour":"#112233","useLayout":false,"faders":[{"src":"in:1","name":"My Kick","colour":"#ff0000"},{"src":"in:1","name":"twice"},{"src":"bad","name":"x"},{"src":"pb:0","name":"","colour":"url(x)"}],"master":false,"masterEq":true,"chanEq":2,"chanDyn":9,"fxSend":true,"hide":true}})J", token));
+        ph::Book back;
+        EXPECT(ph::parseBook(ph::bookJson(b), back));
+        const ph::Performer& p = back.performers[0];
+        EXPECT(p.id == id);                       // an update never moves the link
+        EXPECT(p.name == "Zo\"\xC3\xA9" && p.role == "Lead" && p.colour == "#112233");
+        EXPECT(!p.useLayout && p.faders.size() == 2 && p.faders[0].name == "My Kick" && p.faders[1].src == "pb:0");
+        EXPECT(p.faders[1].colour.empty());       // only a colour gets into a style
+        EXPECT(!p.master && p.masterEq && p.chanEq == 2 && p.chanDyn == 2 && p.fxSend && p.hide);
+        // Snapshots: save, change, load.
+        EXPECT(!ph::applyDesk(b, R"({"t":"snapSave"})", token));   // no name yet
+        EXPECT(ph::applyDesk(b, R"({"t":"snapSave","name":"Band"})", token) && b.current == "Band");
+        EXPECT(ph::applyDesk(b, R"({"t":"remove","id":")" + id + R"("})", token) && b.performers.size() == 1);
+        EXPECT(ph::applyDesk(b, R"({"t":"snapLoad","name":"Band"})", token) && b.performers.size() == 2 && b.performers[0].id == id);
+        EXPECT(ph::applyDesk(b, R"({"t":"snapNew"})", token) && b.performers.empty() && b.current.empty());
+        EXPECT(ph::applyDesk(b, R"({"t":"snapDelete","name":"Band"})", token) && b.snapshots.empty());
+        EXPECT(!ph::applyDesk(b, "not json", token) && !ph::applyDesk(b, R"({"t":"remove","id":"nobody"})", token));
+        EXPECT(ph::validToken("abcd1234") && !ph::validToken("abc") && !ph::validToken("../etc") && !ph::validToken("ABCD"));
+
+        // ⛔ Studio Control: local network, directly, from a local name.
+        EXPECT(ph::deskAllowed("192.168.1.5", "", "", "192.168.1.2:8088", "http://192.168.1.2:8088"));
+        EXPECT(ph::deskAllowed("127.0.0.1", "", "", "127.0.0.1:8088", ""));
+        EXPECT(ph::deskAllowed("192.168.1.5", "", "", "studio.local:8088", "http://studio.local:8088"));
+        EXPECT(!ph::deskAllowed("8.8.8.8", "", "", "192.168.1.2:8088", ""));                       // from outside
+        EXPECT(!ph::deskAllowed("192.168.1.3", "8.8.8.8", "", "phones.example.com", ""));          // the proxy
+        EXPECT(!ph::deskAllowed("192.168.1.3", "", "8.8.8.8", "192.168.1.2:8088", ""));
+        EXPECT(!ph::deskAllowed("192.168.1.3", "", "", "phones.example.com", ""));                 // a proxy without headers
+        EXPECT(!ph::deskAllowed("192.168.1.5", "", "", "192.168.1.2:8088", "http://evil.example.com")); // another page
+
+        // The mixer: a link shows its performer, and only what they were given.
+        rme::State st = rig();
+        for (const char* o : { "/output/8/color", "/output/10/color" }) feed(st, o, 1);
+        feedName(st, "/output/10/name", "Bass");
+        feed(st, "/input/1/eq/enable", 1);
+        feed(st, "/input/1/eq/band1gain", 2);
+        feed(st, "/input/1/eq/band1freq", 100);
+        feed(st, "/input/1/eq/band1q", 1);
+        feed(st, "/input/1/eq/band1type", 0);
+        feed(st, "/input/1/fxsend", -30);
+        feed(st, "/output/8/eq/enable", 1);
+        Mixer mx("1234");
+        mx.sync(st, vis(1, {1, 2}, {0}), true);
+        ph::Performer drums;
+        drums.id = "drumsaaa"; drums.name = "Sam"; drums.role = "Drums"; drums.output = "phones1";
+        drums.useLayout = false;
+        drums.faders = { { "in:2", "Sn", "#00ff00" }, { "in:1", "", "" }, { "in:7", "hidden", "" } };
+        ph::Performer bass;
+        bass.id = "bassaaaa"; bass.name = "Alex"; bass.output = "phones2"; bass.master = false;
+        mx.setPerformers({ drums, bass });
+        mx.takeOut();
+
+        // A phone on the link: its performer, its faders in its order.
+        const int a = mx.open("10.0.0.5");
+        mx.message(a, R"({"t":"hello","pin":"1234","performer":"drumsaaa"})", 0);
+        auto out = mx.takeOut();
+        std::string s = to(out, a);
+        EXPECT(has(s, R"("id":"perf:drumsaaa")") && has(s, R"("role":"Drums")") && !has(s, "bassaaaa") && has(s, R"("link":"ok")"));
+        mx.message(a, R"({"t":"select","mix":"perf:bassaaaa"})", 0);    // someone else's: no
+        out = mx.takeOut();
+        EXPECT(!has(to(out, a), "snapshot"));
+        mx.message(a, R"({"t":"select","mix":"perf:drumsaaa"})", 0);
+        out = mx.takeOut();
+        s = to(out, a);
+        EXPECT(has(s, "\"t\":\"snapshot\"") && has(s, R"("label":"Sn")") && has(s, R"("color":"#00ff00")") && has(s, R"("label":"Kick")"));
+        EXPECT(s.find(R"("id":"in:2")") < s.find(R"("id":"in:1")"));    // the order set on the desk
+        EXPECT(!has(s, "in:7") && !has(s, R"("id":"pb:0")"));           // hidden, and not on the list
+        mx.takeOsc();
+
+        // ⛔ What isn't theirs does nothing, whatever the page sends.
+        mx.message(a, R"({"t":"set","mix":"perf:drumsaaa","src":"pb:0","ctrl":"fader","val":0})", 0);
+        EXPECT(mx.takeOsc().empty());
+        mx.message(a, R"({"t":"set","mix":"perf:bassaaaa","src":"in:1","ctrl":"fader","val":0})", 0);
+        EXPECT(mx.takeOsc().empty());
+        mx.message(a, R"({"t":"strip","mix":"perf:drumsaaa","target":"in:1","param":"b1gain","val":3})", 0);
+        EXPECT(mx.takeOsc().empty());                                   // EQ locked from the factory
+        mx.message(a, R"({"t":"strip","mix":"perf:drumsaaa","target":"in:1","param":"fxsend","val":-3})", 0);
+        EXPECT(mx.takeOsc().empty());                                   // so is the FX send
+        // Their own fader: yes, on their own output.
+        mx.message(a, R"({"t":"set","mix":"perf:drumsaaa","src":"in:1","ctrl":"fader","val":-3})", 0);
+        auto osc = mx.takeOsc();
+        EXPECT(osc.size() == 1 && osc[0].address == "/mix/in/1/8/fader");
+        mx.takeOut();
+
+        // Simple opens the gains and not the rest; Advanced the rest.
+        drums.chanEq = 1;
+        drums.fxSend = true;
+        mx.setPerformers({ drums, bass });
+        out = mx.takeOut();
+        EXPECT(has(to(out, a), R"("eq":1)"));
+        mx.message(a, R"({"t":"strip","mix":"perf:drumsaaa","target":"in:1","param":"b1gain","val":99})", 0);
+        osc = mx.takeOsc();
+        EXPECT(osc.size() == 1 && osc[0].address == "/input/1/eq/band1gain" && osc[0].value == 20.0f);   // clamped
+        mx.message(a, R"({"t":"strip","mix":"perf:drumsaaa","target":"in:1","param":"b1freq","val":500})", 0);
+        EXPECT(mx.takeOsc().empty());
+        mx.message(a, R"({"t":"strip","mix":"perf:drumsaaa","target":"in:1","param":"fxsend","val":-3})", 0);
+        osc = mx.takeOsc();
+        EXPECT(osc.size() == 1 && osc[0].address == "/input/1/fxsend");
+        mx.message(a, R"({"t":"strip","mix":"perf:drumsaaa","target":"in:2","param":"b1gain","val":3})", 0);
+        EXPECT(mx.takeOsc().empty());                                   // TotalMix reported no EQ on it
+        mx.message(a, R"({"t":"strip","mix":"perf:drumsaaa","target":"in:1","param":"48v","val":1})", 0);
+        EXPECT(mx.takeOsc().empty());                                   // never on the list
+        // The page with the curve, from the graph's own maths.
+        mx.takeOut();
+        mx.message(a, R"({"t":"stripOpen","mix":"perf:drumsaaa","target":"in:1"})", 0);
+        out = mx.takeOut();
+        s = to(out, a);
+        EXPECT(has(s, "\"t\":\"strip\"") && has(s, "\"curve\":[") && has(s, "\"b1gain\":{\"v\":"));
+        EXPECT(!has(s, "\"b1freq\""));                                  // Simple doesn't get it
+        mx.takeOsc();
+
+        // The own output: no fader unless it was given.
+        const int c = mx.open("10.0.0.6");
+        mx.message(c, R"({"t":"hello","pin":"1234","performer":"bassaaaa"})", 0);
+        mx.message(c, R"({"t":"select","mix":"perf:bassaaaa"})", 0);
+        out = mx.takeOut();
+        EXPECT(has(to(out, c), R"("shown":0)"));
+        mx.takeOsc();
+        mx.message(c, R"({"t":"master","mix":"perf:bassaaaa","ctrl":"vol","val":0})", 0);
+        EXPECT(mx.takeOsc().empty());
+
+        // A link that's gone says so, and a list when there's no link.
+        const int e = mx.open("10.0.0.7");
+        mx.message(e, R"({"t":"hello","pin":"1234","performer":"nobodyxx"})", 0);
+        out = mx.takeOut();
+        EXPECT(has(to(out, e), R"("link":"unknown")"));
+        const int f = mx.open("10.0.0.8");
+        mx.message(f, R"({"t":"hello","pin":"1234"})", 0);
+        out = mx.takeOut();
+        s = to(out, f);
+        EXPECT(has(s, "perf:drumsaaa") && has(s, "perf:bassaaaa") && !has(s, "phone1"));
+        // Taking the performer away ends it at once.
+        mx.setPerformers({ bass });
+        out = mx.takeOut();
+        EXPECT(has(to(out, a), R"("link":"unknown")"));
+        // No performers: Phones 1-4 as ever.
+        mx.setPerformers({});
+        out = mx.takeOut();
+        EXPECT(has(to(out, f), "phone1"));
     }
 
     if (g_fail) { std::printf("test_orc_phones: %d failure(s)\n", g_fail); return 1; }

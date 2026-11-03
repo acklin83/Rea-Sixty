@@ -18,7 +18,9 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <string>
+#include <cstdlib>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -170,10 +172,45 @@ struct Browser {
     ~Browser() { if (fd >= 0) ::close(fd); }
 };
 
+// One HTTP GET, with its answer.
+static std::string httpGet(int port, const std::string& path, const std::string& headers)
+{
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_port = htons(static_cast<std::uint16_t>(port));
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    std::string in;
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&a), sizeof(a)) == 0) {
+        const std::string req = "GET " + path + " HTTP/1.1\r\n" + headers + "\r\n";
+        ::send(fd, req.data(), req.size(), 0);
+        const auto end = clk::now() + std::chrono::seconds(2);
+        while (clk::now() < end) {
+            pollfd p{ fd, POLLIN, 0 };
+            if (::poll(&p, 1, 50) <= 0) continue;
+            char buf[4096];
+            const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+            if (n <= 0) break;
+            in.append(buf, static_cast<std::size_t>(n));
+        }
+    }
+    ::close(fd);
+    return in;
+}
+
 static bool has(const std::string& s, const std::string& part) { return s.find(part) != std::string::npos; }
 
 int main()
 {
+    // ⛔ ORC's folder is $HOME's. A test on this Mac must not read Frank's
+    // performers, nor anything write to them.
+    char home[] = "/tmp/orc-phones-test-XXXXXX";
+    if (::mkdtemp(home)) {
+        ::setenv("HOME", home, 1);
+        ::mkdir((std::string(home) + "/Library").c_str(), 0755);
+        ::mkdir((std::string(home) + "/Library/Application Support").c_str(), 0755);
+    }
+
     FakeMix mix;
     ph::Settings s;
     s.enabled  = true;
@@ -181,7 +218,24 @@ int main()
     s.sendPort = mix.port;
     s.recvPort = freePort(SOCK_DGRAM);
     ph::Server srv;
-    srv.apply(s, "2468");
+    srv.apply(s, "2468", "9999");
+    // ⛔ Studio Control: refused through a proxy, whichever way it comes in.
+    {
+        const auto t0 = clk::now();
+        while (clk::now() - t0 < std::chrono::seconds(2) && !srv.status().listening)
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        const std::string direct = httpGet(s.webPort, "/desk", "Host: 127.0.0.1\r\n");
+        // No page in this test's bundle: 404. What counts is that it isn't 403.
+        EXPECT(direct.compare(0, 12, "HTTP/1.1 403") != 0);
+        EXPECT(httpGet(s.webPort, "/desk", "Host: 127.0.0.1\r\nX-Forwarded-For: 8.8.8.8\r\n").compare(0, 12, "HTTP/1.1 403") == 0);
+        EXPECT(httpGet(s.webPort, "/desk", "Host: 127.0.0.1\r\nX-Real-IP: 8.8.8.8\r\n").compare(0, 12, "HTTP/1.1 403") == 0);
+        EXPECT(httpGet(s.webPort, "/desk", "Host: phones.example.com\r\n").compare(0, 12, "HTTP/1.1 403") == 0);
+        const std::string up = "Host: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                               "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n";
+        EXPECT(httpGet(s.webPort, "/deskws", up + "Origin: http://evil.example.com\r\n").compare(0, 12, "HTTP/1.1 403") == 0);
+        EXPECT(httpGet(s.webPort, "/deskws", up + "X-Forwarded-For: 8.8.8.8\r\n").compare(0, 12, "HTTP/1.1 403") == 0);
+        EXPECT(httpGet(s.webPort, "/p/..%2f", "Host: x\r\n").compare(0, 12, "HTTP/1.1 404") == 0);
+    }
 
     // The second remote asks at once and every 3 s.
     mix.pump(1500);
@@ -236,7 +290,7 @@ int main()
         EXPECT(srv.status().phones == 2 && srv.status().held == 1);
 
         // A new PIN: both back to the PIN page.
-        srv.apply(s, "1357");
+        srv.apply(s, "1357", "9999");
         EXPECT(has(b.messages(400), "\"t\":\"pin\""));
     }
     // Both closed: nobody left.
@@ -269,7 +323,7 @@ int main()
 
     // Off: the port is free again.
     s.enabled = false;
-    srv.apply(s, "1357");
+    srv.apply(s, "1357", "9999");
     {
         Browser d;
         EXPECT(!d.connect(s.webPort));

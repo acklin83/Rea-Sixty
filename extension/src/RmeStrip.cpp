@@ -450,6 +450,12 @@ Writes nudge(const State& st, Row r, int ch, const Param& p, int detents, double
     return writesFor(st, r, ch, p, nv);
 }
 
+Writes setTo(const State& st, Row r, int ch, const Param& p, double v)
+{
+    if (!available(st, r, ch, p) || !std::isfinite(v)) return {};
+    return writesFor(st, r, ch, p, clampTo(p, r, v));
+}
+
 Writes resetWrites(const State& st, Row r, int ch, const Param& p)
 {
     if (!available(st, r, ch, p)) return {};

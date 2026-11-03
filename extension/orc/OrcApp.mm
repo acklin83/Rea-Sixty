@@ -7,6 +7,7 @@
 #import <CoreImage/CoreImage.h>
 
 #include "OrcConfig.h"
+#include "OrcDeskWindow.h"
 #include "PhonesServer.h"
 #include "Surface.h"
 
@@ -24,6 +25,7 @@ static orc::Surface* g_surface = nullptr;
 @property (nonatomic, strong) NSMenuItem*   moremeLine;
 @property (nonatomic, strong) NSMenuItem*   moremeAddress;
 @property (nonatomic, strong) NSMenuItem*   moremeQr;
+@property (nonatomic, strong) NSMenuItem*   moremeDesk;
 @property (nonatomic, strong) NSImageView*  moremeQrView;
 @property (nonatomic, copy)   NSString*     moremeQrFor;
 @end
@@ -136,6 +138,10 @@ static NSImage* qrImage(NSString* text, CGFloat side)
             _moremeQr.view = box;
         }
         [menu addItem:_moremeQr];
+        _moremeDesk = [[NSMenuItem alloc] initWithTitle:@"Studio Control…" action:@selector(openStudioControl:)
+                                          keyEquivalent:@""];
+        _moremeDesk.target = self;
+        [menu addItem:_moremeDesk];
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItemWithTitle:@"Settings…"
                         action:@selector(openSettings:)
@@ -185,6 +191,7 @@ static NSImage* qrImage(NSString* text, CGFloat side)
     namespace ph = orc::phones;
     const ph::Status mm = ph::server().status();
     self.moremeLine.title = [NSString stringWithFormat:@"MoreMe   %s", ph::summary(mm).c_str()];
+    self.moremeDesk.hidden = !(mm.enabled && mm.listening);
     const std::string addr = (mm.enabled && mm.listening) ? ph::pageAddress(mm.port) : std::string();
     self.moremeAddress.hidden = addr.empty();
     self.moremeQr.hidden = addr.empty();
@@ -198,6 +205,8 @@ static NSImage* qrImage(NSString* text, CGFloat side)
         }
     }
 }
+
+- (void)openStudioControl:(id)sender { orc::openStudioControl(); }
 
 - (void)copyMoremeAddress:(id)sender
 {

@@ -148,6 +148,10 @@ Writes resetWrites(const State& st, Row r, int ch, const Param& p);
 // A key pressed: toggle, or the next list entry.
 Writes press(const State& st, Row r, int ch, const Param& p);
 
+// A value from somewhere else than a knob (MoreMe's phones): clamped to the
+// parameter's range, empty when the channel doesn't have it.
+Writes setTo(const State& st, Row r, int ch, const Param& p, double v);
+
 // "/sendchan/input/3": asks TotalMix for every value of one channel. Empty on
 // the FX row: TotalMix has no /sendchan for the effects.
 std::string sendChanAddress(Row r, int ch);

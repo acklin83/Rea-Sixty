@@ -2,6 +2,9 @@
 
 #include "JsonTree.h"
 #include "RmeNames.h"
+#include "RmeStrip.h"
+#include "RmeUf1.h"
+#include "Uf1EqCurve.h"
 #include "Sha256.h"
 
 #include <algorithm>
@@ -14,6 +17,8 @@
 namespace orc::phones {
 
 namespace rme = reasixty::rme;
+namespace rmeu = reasixty::rme::uf1;
+namespace strip = reasixty::rme::strip;
 
 // ── the PIN ──────────────────────────────────────────────────────────────────
 
@@ -197,7 +202,7 @@ std::string memoKey(int bus, const std::string& src)
 
 // One field of a parsed message. JSON's value, as JavaScript would read it.
 struct Msg {
-    std::string t, pin, mix, src, ctrl;
+    std::string t, pin, mix, src, ctrl, performer, target, param;
     bool        pinIsString = false;
     bool        force       = false;
     bool        on          = true;   // "meters
@@ -222,6 +227,9 @@ bool parseMsg(const std::string& json, Msg& out)
     text("mix", out.mix);
     text("src", out.src);
     text("ctrl", out.ctrl);
+    text("performer", out.performer);
+    text("target", out.target);
+    text("param", out.param);
     if (const wdl_json_element* f = root->get_item_by_name("force"); f && f->m_value) {
         // JavaScript truthiness of what the page can send (true, or a number).
         const std::string v = f->m_value;
@@ -284,6 +292,35 @@ int Mixer::busOfPhone_(int phone) const
 {
     if (phone < 1 || phone > 4) return -1;
     return st_.phones[phone - 1];   // -1 = no output assigned
+}
+
+const Performer* Mixer::perfOfMix_(const std::string& mix) const
+{
+    if (mix.rfind("perf:", 0) != 0) return nullptr;
+    const std::string tok = mix.substr(5);
+    for (const Performer& p : perf_)
+        if (p.id == tok) return &p;
+    return nullptr;
+}
+
+// -1: no such mix, or its output has no channel right now. Phones 1-4 only while
+// there are no performers.
+int Mixer::busOfMix_(const std::string& mix) const
+{
+    if (const Performer* p = perfOfMix_(mix)) return rmeu::keyOutput(st_, p->output);
+    return perf_.empty() ? busOfPhone_(phoneOf(mix)) : -1;
+}
+
+void Mixer::setPerformers(const std::vector<Performer>& v)
+{
+    perf_ = v;
+    for (auto& [id, c] : clients_) {
+        c.cfgJson.clear();
+        if (!c.authed || c.mix.empty()) continue;
+        if (busOfMix_(c.mix) < 0) { c.mix.clear(); c.stripTarget.clear(); c.srcSig.clear(); }
+    }
+    pushConfig_();
+    resnapViewers_();
 }
 
 int Mixer::holderOf_(const std::string& mixId) const
@@ -350,77 +387,156 @@ double Mixer::shownDb_(int bus, const std::string& kind, int n) const
 
 std::string Mixer::configJson_(int forId) const
 {
+    const auto self = clients_.find(forId);
+    const std::string token = self == clients_.end() ? std::string() : self->second.token;
     std::string mixes = "[";
     bool first = true;
-    for (int p = 1; p <= 4; ++p) {
-        const int bus = busOfPhone_(p);
-        if (bus < 0) continue;
-        const std::string id = "phone" + std::to_string(p);
-        std::string label = "Phones " + std::to_string(p);
-        std::string colour;
+    // The output's colour and name, what a mix shows when nobody named it.
+    auto outputLook = [&](int bus, std::string& label, std::string& colour) {
         if (const auto o = st_.outputs.find(bus); o != st_.outputs.end()) {
             if (!o->second.name.empty()) label = o->second.name;
             colour = colourHex(o->second.colour);
         }
-        if (!names_[p - 1].empty()) label = names_[p - 1];
-        if (colour.empty()) colour = kPalette[(p - 1) % 8];
-        const int h = holderOf_(id);
-        if (!first) mixes += ",";
-        first = false;
-        mixes += "{\"id\":" + jstr(id) + ",\"phone\":" + std::to_string(p)
-               + ",\"bus\":" + std::to_string(bus) + ",\"label\":" + jstr(label)
-               + ",\"color\":" + jstr(colour)
-               + ",\"locked\":" + ((h != 0 && h != forId) ? "true" : "false") + "}";
+    };
+    std::string link = "ok";
+    if (!token.empty() || !perf_.empty()) {
+        // ⇨ A LINK SHOWS ITS PERFORMER AND NOBODY ELSE. Without one, the list.
+        bool found = false, routed = false;
+        for (std::size_t i = 0; i < perf_.size(); ++i) {
+            const Performer& p = perf_[i];
+            if (!token.empty() && p.id != token) continue;
+            found = true;
+            const std::string id = "perf:" + p.id;
+            const int bus = busOfMix_(id);
+            if (bus < 0) continue;
+            routed = true;
+            const std::string out = rmeu::displayName(st_, rmeu::Row::Output, bus);
+            std::string colour = p.colour;
+            if (colour.empty()) colour = kPalette[i % 8];
+            if (!first) mixes += ",";
+            first = false;
+            mixes += "{\"id\":" + jstr(id) + ",\"bus\":" + std::to_string(bus)
+                   + ",\"label\":" + jstr(p.name) + ",\"role\":" + jstr(p.role)
+                   + ",\"out\":" + jstr(out) + ",\"color\":" + jstr(colour) + ",\"locked\":false}";
+        }
+        if (!token.empty()) link = !found ? "unknown" : !routed ? "noOutput" : "ok";
+    } else {
+        for (int p = 1; p <= 4; ++p) {
+            const int bus = busOfPhone_(p);
+            if (bus < 0) continue;
+            const std::string id = "phone" + std::to_string(p);
+            std::string label = "Phones " + std::to_string(p);
+            std::string colour;
+            outputLook(bus, label, colour);
+            if (!names_[p - 1].empty()) label = names_[p - 1];
+            if (colour.empty()) colour = kPalette[(p - 1) % 8];
+            const int h = holderOf_(id);
+            if (!first) mixes += ",";
+            first = false;
+            mixes += "{\"id\":" + jstr(id) + ",\"phone\":" + std::to_string(p)
+                   + ",\"bus\":" + std::to_string(bus) + ",\"label\":" + jstr(label)
+                   + ",\"color\":" + jstr(colour)
+                   + ",\"locked\":" + ((h != 0 && h != forId) ? "true" : "false") + "}";
+        }
     }
     mixes += "]";
     return "{\"t\":\"config\",\"version\":" + jstr(version_) + ",\"tmSeen\":"
-         + (tmSeen_ ? "true" : "false") + ",\"mixes\":" + mixes + "}";
+         + (tmSeen_ ? "true" : "false") + ",\"link\":" + jstr(link) + ",\"mixes\":" + mixes + "}";
 }
 
-// The shared visible set, inputs then playbacks, as the page lists it.
-std::string Mixer::sourcesJson_() const
+// What a mix shows, in its order. Phones 1-4 and a performer on TotalMix' layout:
+// the shared visible set, inputs then playbacks. A performer's own list: those of
+// its faders TotalMix shows right now; a hidden channel's fader waits in the file.
+std::vector<Mixer::Src> Mixer::sourcesOf_(const std::string& mix) const
+{
+    std::vector<Src> out;
+    int i = 0;
+    auto look = [&](const std::string& kind, int n) {
+        Src x;
+        x.kind = kind;
+        x.n    = n;
+        x.id   = kind + ":" + std::to_string(n);
+        const auto& m = kind == "in" ? st_.inputs : st_.playbacks;
+        if (const auto c = m.find(n); c != m.end()) {
+            x.label  = rme::toUtf8(c->second.name);
+            x.colour = colourHex(c->second.colour);
+        }
+        if (x.label.empty()) x.label = (kind == "in" ? "IN " : "PB ") + std::to_string(n);
+        // TotalMix' colour wins; the positional palette fills the rest.
+        if (x.colour.empty()) x.colour = kPalette[i % 8];
+        ++i;
+        return x;
+    };
+    const Performer* p = perfOfMix_(mix);
+    if (p && !p->useLayout) {
+        for (const Fader& f : p->faders) {
+            std::string kind; int n = 0;
+            if (!splitSrc(f.src, kind, n)) continue;
+            const auto& vis = kind == "in" ? visIn_ : visPb_;
+            if (std::find(vis.begin(), vis.end(), n) == vis.end()) continue;
+            Src x = look(kind, n);
+            if (!f.name.empty())   x.label  = f.name;
+            if (!f.colour.empty()) x.colour = f.colour;
+            out.push_back(std::move(x));
+        }
+        return out;
+    }
+    for (const int n : visIn_) out.push_back(look("in", n));
+    for (const int n : visPb_) out.push_back(look("pb", n));
+    return out;
+}
+
+bool Mixer::srcAllowed_(const std::string& mix, const std::string& src) const
+{
+    if (!perfOfMix_(mix)) return true;
+    for (const Src& x : sourcesOf_(mix))
+        if (x.id == src) return true;
+    return false;
+}
+
+std::string Mixer::sourcesJson_(const std::string& mix) const
 {
     std::string o = "[";
-    int i = 0;
-    auto add = [&](const std::string& kind, int n) {
-        const auto& m = kind == "in" ? st_.inputs : st_.playbacks;
-        std::string label, colour;
-        if (const auto c = m.find(n); c != m.end()) {
-            label  = c->second.name;
-            colour = colourHex(c->second.colour);
-        }
-        if (label.empty()) label = (kind == "in" ? "IN " : "PB ") + std::to_string(n);
-        // TotalMix' colour wins; the positional palette fills the rest.
-        if (colour.empty()) colour = kPalette[i % 8];
-        if (i++) o += ",";
-        o += "{\"id\":" + jstr(kind + ":" + std::to_string(n)) + ",\"kind\":" + jstr(kind)
-           + ",\"n\":" + std::to_string(n) + ",\"label\":" + jstr(label)
-           + ",\"max\":" + std::to_string(maxOf(kind)) + ",\"color\":" + jstr(colour) + "}";
-    };
-    for (const int n : visIn_) add("in", n);
-    for (const int n : visPb_) add("pb", n);
+    bool first = true;
+    const bool perf = perfOfMix_(mix) != nullptr;
+    for (const Src& x : sourcesOf_(mix)) {
+        if (!first) o += ",";
+        first = false;
+        o += "{\"id\":" + jstr(x.id) + ",\"kind\":" + jstr(x.kind)
+           + ",\"n\":" + std::to_string(x.n) + ",\"label\":" + jstr(x.label)
+           + ",\"max\":" + std::to_string(maxOf(x.kind)) + ",\"color\":" + jstr(x.colour);
+        if (perf) o += ",\"eq\":" + std::to_string(stripLevel_(mix, x.id, "eq"))
+                     + ",\"dyn\":" + std::to_string(stripLevel_(mix, x.id, "dyn"))
+                     + ",\"fx\":" + std::to_string(stripLevel_(mix, x.id, "fx"));
+        o += "}";
+    }
     return o + "]";
 }
 
-std::string Mixer::snapshotJson_(int phone) const
+std::string Mixer::snapshotJson_(const std::string& mix) const
 {
-    const int bus = busOfPhone_(phone);
+    const int bus = busOfMix_(mix);
+    const bool perf = perfOfMix_(mix) != nullptr;
     std::string values = "{";
     bool first = true;
-    auto add = [&](const std::string& kind, int n) {
-        const rme::Bus b = busOfKind(kind);
-        const std::string id = kind + ":" + std::to_string(n);
-        const auto pan = st_.mixPan.find(rme::State::mixKey(b, n, bus));
-        const auto mm  = mute_.find(memoKey(bus, id));
+    for (const Src& x : sourcesOf_(mix)) {
+        const rme::Bus b = busOfKind(x.kind);
+        const auto pan = st_.mixPan.find(rme::State::mixKey(b, x.n, bus));
+        const auto mm  = mute_.find(memoKey(bus, x.id));
         if (!first) values += ",";
         first = false;
-        values += jstr(id) + ":{\"db\":" + jnum(shownDb_(bus, kind, n))
+        values += jstr(x.id) + ":{\"db\":" + jnum(shownDb_(bus, x.kind, x.n))
                 + ",\"pan\":" + jnum(pan == st_.mixPan.end() ? 0.0 : pan->second)
                 + ",\"mute\":" + ((mm != mute_.end() && mm->second.muted) ? "1" : "0")
-                + ",\"solo\":" + (st_.mixSoloed(b, n, bus) ? "1" : "0") + "}";
-    };
-    for (const int n : visIn_) add("in", n);
-    for (const int n : visPb_) add("pb", n);
+                + ",\"solo\":" + (st_.mixSoloed(b, x.n, bus) ? "1" : "0");
+        if (perf && stripLevel_(mix, x.id, "fx") > 0) {
+            double fx = -65.0;
+            if (const strip::Param* pr = strip::find("fxsend"))
+                strip::value(st_, x.kind == "in" ? rmeu::Row::Input : rmeu::Row::Playback, x.n, *pr, fx);
+            values += ",\"fx\":" + jnum(fx);
+        }
+        values += "}";
+    }
     values += "}";
     double db = 0.0;
     bool   mute = false;
@@ -428,9 +544,19 @@ std::string Mixer::snapshotJson_(int phone) const
         db   = o->second.volume;
         mute = o->second.mute;
     }
-    return "{\"t\":\"snapshot\",\"mix\":" + jstr("phone" + std::to_string(phone))
-         + ",\"sources\":" + sourcesJson_() + ",\"values\":" + values
-         + ",\"master\":{\"db\":" + jnum(db) + ",\"mute\":" + (mute ? "1" : "0") + "}}";
+    std::string masterExtra;
+    if (const Performer* p = perfOfMix_(mix)) {
+        masterExtra = ",\"shown\":" + std::string(p->master ? "1" : "0")
+                    + ",\"eq\":" + std::to_string(stripLevel_(mix, "m", "eq"))
+                    + ",\"dyn\":" + std::to_string(stripLevel_(mix, "m", "dyn"))
+                    + ",\"al\":" + std::to_string(stripLevel_(mix, "m", "al"));
+        masterExtra += "},\"hide\":" + std::string(p->hide ? "1" : "0");
+    } else {
+        masterExtra = "}";
+    }
+    return "{\"t\":\"snapshot\",\"mix\":" + jstr(mix)
+         + ",\"sources\":" + sourcesJson_(mix) + ",\"values\":" + values
+         + ",\"master\":{\"db\":" + jnum(db) + ",\"mute\":" + (mute ? "1" : "0") + masterExtra + "}";
 }
 
 // Per client and only when it differs from what that client was last sent:
@@ -446,15 +572,19 @@ void Mixer::pushConfig_()
     }
 }
 
+void Mixer::snapTo_(int id, Client& c)
+{
+    c.lvSent.clear();   // a new snapshot rebuilds the cards
+    c.fxSent.clear();
+    c.srcSig = sourcesJson_(c.mix);
+    send_(id, snapshotJson_(c.mix));
+}
+
 void Mixer::resnapViewers_()
 {
     for (auto& [id, c] : clients_) {
-        if (!c.authed) continue;
-        const int p = phoneOf(c.mix);
-        if (p && busOfPhone_(p) >= 0) {
-            c.lvSent.clear();   // a new snapshot rebuilds the cards
-            send_(id, snapshotJson_(p));
-        }
+        if (!c.authed || c.mix.empty()) continue;
+        if (busOfMix_(c.mix) >= 0) snapTo_(id, c);
     }
 }
 
@@ -497,8 +627,7 @@ void Mixer::meters()
     };
     for (auto& [id, c] : clients_) {
         if (!c.authed || !c.meters) continue;
-        const int p = phoneOf(c.mix);
-        const int bus = busOfPhone_(p);
+        const int bus = busOfMix_(c.mix);
         if (bus < 0) continue;
         std::string body;
         auto put = [&](const std::string& key, const std::vector<int>& v) {
@@ -511,8 +640,9 @@ void Mixer::meters()
             body += jstr(key) + ":" + meterJson(v);
         };
         put("m", steps(st_.outputs, st_.levelOut, bus));
-        for (const int n : visIn_) put("in:" + std::to_string(n), steps(st_.inputs, st_.levelIn, n));
-        for (const int n : visPb_) put("pb:" + std::to_string(n), steps(st_.playbacks, st_.levelPb, n));
+        for (const Src& x : sourcesOf_(c.mix))
+            put(x.id, x.kind == "in" ? steps(st_.inputs, st_.levelIn, x.n)
+                                     : steps(st_.playbacks, st_.levelPb, x.n));
         if (!body.empty())
             send_(id, "{\"t\":\"levels\",\"mix\":" + jstr(c.mix) + ",\"lv\":{" + body + "}}");
     }
@@ -522,8 +652,7 @@ void Mixer::broadcastBus_(int bus, const std::function<std::string(const std::st
 {
     for (const auto& [id, c] : clients_) {
         if (!c.authed) continue;
-        const int p = phoneOf(c.mix);
-        if (p && busOfPhone_(p) == bus) send_(id, make("phone" + std::to_string(p)));
+        if (!c.mix.empty() && busOfMix_(c.mix) == bus) send_(id, make(c.mix));
     }
 }
 
@@ -571,6 +700,7 @@ void Mixer::message(int id, const std::string& json, long long nowMs)
     Client& c = it->second;
     Msg m;
     if (!parseMsg(json, m)) return;
+    if (m.t == "hello" && validToken(m.performer)) c.token = m.performer;
     if (!c.authed) {
         if (m.t == "hello") tryPin_(c, m.pinIsString ? m.pin : std::string(), nowMs, id);
         return;
@@ -582,18 +712,25 @@ void Mixer::message(int id, const std::string& json, long long nowMs)
         return;
     }
     if (m.t == "select") {
-        const int phone = phoneOf(m.mix);
-        if (!phone || busOfPhone_(phone) < 0) return;
-        const int h = holderOf_(m.mix);
-        if (h && h != id) {
-            // Taken: the Tölpel-Sperre. Only a deliberate takeover gets past.
-            if (!m.force) { send_(id, "{\"t\":\"denied\",\"mix\":" + jstr(m.mix) + "}"); return; }
-            clients_[h].mix.clear();
-            send_(h, "{\"t\":\"released\",\"mix\":" + jstr(m.mix) + "}");
+        if (m.mix.rfind("perf:", 0) == 0) {
+            // ⇨ NO LOCK ON A PERFORMER: the link is theirs, and a second device of
+            // theirs moves the same mix. A link opens that performer only.
+            if (!c.token.empty() && m.mix != "perf:" + c.token) return;
+            if (busOfMix_(m.mix) < 0) return;
+        } else {
+            const int phone = phoneOf(m.mix);
+            if (!phone || busOfMix_(m.mix) < 0) return;
+            const int h = holderOf_(m.mix);
+            if (h && h != id) {
+                // Taken: the Tölpel-Sperre. Only a deliberate takeover gets past.
+                if (!m.force) { send_(id, "{\"t\":\"denied\",\"mix\":" + jstr(m.mix) + "}"); return; }
+                clients_[h].mix.clear();
+                send_(h, "{\"t\":\"released\",\"mix\":" + jstr(m.mix) + "}");
+            }
         }
         c.mix = m.mix;
-        c.lvSent.clear();   // a new headphone: every meter once
-        send_(id, snapshotJson_(phone));
+        c.stripTarget.clear();
+        snapTo_(id, c);
         refresh_ = true;   // re-read the layout, so a newly shown channel turns up
         pushConfig_();     // the claim changed: everybody's locked flags
         return;
@@ -605,9 +742,43 @@ void Mixer::message(int id, const std::string& json, long long nowMs)
         return;
     }
 
-    const int phone = phoneOf(m.mix);
-    const int bus   = busOfPhone_(phone);
+    // ⛔ A performer's mix answers to whoever is on it, and to what the sound
+    // engineer gave them: the page hides the rest, this is what enforces it.
+    const Performer* perf = perfOfMix_(m.mix);
+    if (perf && c.mix != m.mix) return;
+    const int bus = busOfMix_(m.mix);
     if (bus < 0) return;
+    if (!m.src.empty() && !srcAllowed_(m.mix, m.src)) return;
+
+    if (m.t == "stripOpen") {
+        c.stripTarget = stripLevel_(m.mix, m.target, "any") > 0 ? m.target : std::string();
+        c.stripSent.clear();
+        int row = 0, ch = 0;
+        if (!c.stripTarget.empty() && parseTarget_(m.mix, c.stripTarget, row, ch)) {
+            // TotalMix' rounds may not carry a channel's EQ: ask for it.
+            const std::string ask = strip::sendChanAddress(static_cast<rmeu::Row>(row), ch);
+            if (!ask.empty()) oscQ_.push_back({ ask, 1.0f });
+        }
+        pushStrips_();
+        return;
+    }
+    if (m.t == "stripClose") {
+        c.stripTarget.clear();
+        c.stripSent.clear();
+        return;
+    }
+    if (m.t == "strip") {
+        if (!stripMayWrite_(m.mix, m.target, m.param)) return;
+        int row = 0, ch = 0;
+        const strip::Param* pr = strip::find(m.param);
+        if (!pr || !parseTarget_(m.mix, m.target, row, ch)) return;
+        for (const auto& [addr, v] : strip::setTo(st_, static_cast<rmeu::Row>(row), ch, *pr, m.val))
+            osc_(addr, v);
+        pushStrips_();
+        if (m.param == "fxsend") pushFx_();
+        return;
+    }
+    if (m.t == "master" && perf && !perf->master) return;
 
     if (m.t == "set") {
         std::string kind; int n = 0;
@@ -775,13 +946,180 @@ void Mixer::sync(const rme::State& st, const rme::Manager::Visible& vis, bool tm
     }
 
     // The source list (visible set, names, colours) lives in the snapshot:
-    // when it changes, everybody on a headphone gets a new one.
-    std::string sources = sourcesJson_();
-    if (sources != lastSources_) {
-        lastSources_ = std::move(sources);
-        resnapViewers_();
+    // when it changes, whoever it changed for gets a new one.
+    for (auto& [id, c] : clients_) {
+        if (!c.authed || c.mix.empty()) continue;
+        // No output right now (a remote that reconnects starts empty): the first
+        // state with one is new to this client.
+        if (busOfMix_(c.mix) < 0) { c.srcSig.clear(); continue; }
+        if (sourcesJson_(c.mix) != c.srcSig) snapTo_(id, c);
     }
     pushConfig_();
+    pushStrips_();
+    pushFx_();
+}
+
+// ── EQ, dynamics, FX send ────────────────────────────────────────────────────
+
+namespace {
+
+// By group, what a level unlocks. Ids from RmeStrip's catalogue.
+const char* const kEqSimple[]  = { "eq_on", "b1gain", "b2gain", "b3gain" };
+const char* const kEqFull[]    = { "b1freq", "b1q", "b1type", "b2freq", "b2q", "b3freq", "b3q", "b3type",
+                                   "lc_on", "lc_freq", "lc_slope" };
+const char* const kDynSimple[] = { "dyn_on", "compthres", "compratio", "dyngain" };
+const char* const kDynFull[]   = { "attack", "release", "expthres", "expratio" };
+const char* const kAuto[]      = { "al_on", "maxgain", "headroom", "risetime" };
+
+template <std::size_t N>
+bool in(const char* const (&list)[N], const std::string& id)
+{
+    return std::any_of(list, list + N, [&](const char* x) { return id == x; });
+}
+
+bool hasParam(const rme::State& st, rmeu::Row r, int ch, const char* id)
+{
+    const strip::Param* p = strip::find(id);
+    return p && strip::available(st, r, ch, *p);
+}
+
+} // namespace
+
+// "m" is the mix's own output, else a source of the mix.
+bool Mixer::parseTarget_(const std::string& mix, const std::string& target, int& row, int& ch) const
+{
+    if (target == "m") {
+        ch  = busOfMix_(mix);
+        row = static_cast<int>(rmeu::Row::Output);
+        return ch >= 0;
+    }
+    std::string kind;
+    if (!splitSrc(target, kind, ch)) return false;
+    row = static_cast<int>(kind == "in" ? rmeu::Row::Input : rmeu::Row::Playback);
+    return true;
+}
+
+// What this mix may do to a target, 0 off, 1 simple, 2 advanced, and only what
+// TotalMix has on that channel. Group "any": the highest of them.
+int Mixer::stripLevel_(const std::string& mix, const std::string& target, const std::string& group) const
+{
+    const Performer* p = perfOfMix_(mix);
+    int rowI = 0, ch = 0;
+    if (!p || !parseTarget_(mix, target, rowI, ch)) return 0;
+    if (target != "m" && !srcAllowed_(mix, target)) return 0;
+    const auto row = static_cast<rmeu::Row>(rowI);
+    const bool own = target == "m";
+    auto level = [&](const std::string& g) -> int {
+        if (g == "eq")
+            return hasParam(st_, row, ch, "eq_on") ? (own ? (p->masterEq ? 2 : 0) : p->chanEq) : 0;
+        if (g == "dyn")
+            return hasParam(st_, row, ch, "dyn_on") ? (own ? (p->masterDyn ? 2 : 0) : p->chanDyn) : 0;
+        if (g == "al")   // on a channel Auto Level is the advanced end of dynamics
+            return hasParam(st_, row, ch, "al_on") ? (own ? (p->masterAuto ? 2 : 0) : (p->chanDyn == 2 ? 2 : 0)) : 0;
+        if (g == "fx")
+            return !own && p->fxSend && hasParam(st_, row, ch, "fxsend") ? 1 : 0;
+        return 0;
+    };
+    if (group == "any") return std::max({ level("eq"), level("dyn"), level("al"), level("fx") });
+    return level(group);
+}
+
+bool Mixer::stripMayWrite_(const std::string& mix, const std::string& target, const std::string& param) const
+{
+    if (param == "fxsend") return stripLevel_(mix, target, "fx") > 0;
+    if (in(kEqSimple, param))  return stripLevel_(mix, target, "eq") >= 1;
+    if (in(kEqFull, param))    return stripLevel_(mix, target, "eq") >= 2;
+    if (in(kDynSimple, param)) return stripLevel_(mix, target, "dyn") >= 1;
+    if (in(kDynFull, param))   return stripLevel_(mix, target, "dyn") >= 2;
+    if (in(kAuto, param))      return stripLevel_(mix, target, "al") >= 2;
+    return false;
+}
+
+// The page for one target: levels, values, ranges, and the curve from the graph's
+// own maths on this side, so the phone holds no second copy of it.
+std::string Mixer::stripJson_(const std::string& mix, const std::string& target) const
+{
+    int rowI = 0, ch = 0;
+    if (!parseTarget_(mix, target, rowI, ch)) return {};
+    const auto row = static_cast<rmeu::Row>(rowI);
+    std::string vals = "{";
+    bool first = true;
+    auto add = [&](const char* id) {
+        const strip::Param* p = strip::find(id);
+        double v = 0.0;
+        if (!p || !strip::available(st_, row, ch, *p) || !strip::value(st_, row, ch, *p, v)) return;
+        if (!first) vals += ",";
+        first = false;
+        vals += jstr(id) + ":{\"v\":" + jnum(v) + ",\"lo\":" + jnum(p->lo) + ",\"hi\":" + jnum(p->hi)
+              + ",\"step\":" + jnum(p->step) + "}";
+    };
+    const int eq = stripLevel_(mix, target, "eq"), dyn = stripLevel_(mix, target, "dyn"),
+              al = stripLevel_(mix, target, "al");
+    if (eq >= 1)  for (const char* id : kEqSimple)  add(id);
+    if (eq >= 2)  for (const char* id : kEqFull)    add(id);
+    if (dyn >= 1) for (const char* id : kDynSimple) add(id);
+    if (dyn >= 2) for (const char* id : kDynFull)   add(id);
+    if (al >= 2)  for (const char* id : kAuto)      add(id);
+    vals += "}";
+    std::string curve = "[";
+    if (eq >= 1) {
+        const uf1eq::Model model = rmeu::eqModel(st_, row, ch);
+        constexpr int kPoints = 121;
+        for (int i = 0; i < kPoints; ++i) {
+            const double f = 20.0 * std::pow(1000.0, static_cast<double>(i) / (kPoints - 1));
+            double db = 0.0;
+            if (model.on)
+                for (const uf1eq::Band& b : model.bands) db += uf1eq::bandDb(b, f);
+            char t[16];
+            std::snprintf(t, sizeof(t), "%.2f", std::clamp(db, -30.0, 30.0));
+            if (i) curve += ",";
+            curve += t;
+        }
+    }
+    curve += "]";
+    return "{\"t\":\"strip\",\"mix\":" + jstr(mix) + ",\"target\":" + jstr(target)
+         + ",\"eq\":" + std::to_string(eq) + ",\"dyn\":" + std::to_string(dyn)
+         + ",\"al\":" + std::to_string(al) + ",\"vals\":" + vals + ",\"curve\":" + curve + "}";
+}
+
+void Mixer::pushStrips_()
+{
+    for (auto& [id, c] : clients_) {
+        if (!c.authed || c.stripTarget.empty() || c.mix.empty()) continue;
+        if (stripLevel_(c.mix, c.stripTarget, "any") <= 0) {   // taken away, or gone
+            c.stripTarget.clear();
+            c.stripSent.clear();
+            send_(id, "{\"t\":\"stripClosed\"}");
+            continue;
+        }
+        std::string json = stripJson_(c.mix, c.stripTarget);
+        if (json == c.stripSent) continue;
+        c.stripSent = json;
+        send_(id, std::move(json));
+    }
+}
+
+void Mixer::pushFx_()
+{
+    const strip::Param* pr = strip::find("fxsend");
+    if (!pr) return;
+    for (auto& [id, c] : clients_) {
+        if (!c.authed || c.mix.empty()) continue;
+        const Performer* p = perfOfMix_(c.mix);
+        if (!p || !p->fxSend) continue;
+        for (const Src& x : sourcesOf_(c.mix)) {
+            if (stripLevel_(c.mix, x.id, "fx") <= 0) continue;
+            double v = -65.0;
+            if (!strip::value(st_, x.kind == "in" ? rmeu::Row::Input : rmeu::Row::Playback, x.n, *pr, v)) continue;
+            const auto old = c.fxSent.find(x.id);
+            if (old != c.fxSent.end() && old->second == v) continue;
+            const bool firstTime = old == c.fxSent.end();
+            c.fxSent[x.id] = v;
+            if (!firstTime)   // the snapshot had it
+                send_(id, "{\"t\":\"update\",\"mix\":" + jstr(c.mix) + ",\"src\":" + jstr(x.id)
+                              + ",\"fx\":" + jnum(v) + "}");
+        }
+    }
 }
 
 } // namespace orc::phones

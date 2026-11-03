@@ -3,6 +3,7 @@
 
 #include "OrcConfig.h"
 #include "OrcLayout.h"
+#include "OrcDeskWindow.h"
 #include "PhonesServer.h"
 
 #include <string>
@@ -43,6 +44,8 @@ int port(NSTextField* f)
 @property (nonatomic, strong) NSTextField* sendPort;
 @property (nonatomic, strong) NSTextField* recvPort;
 @property (nonatomic, strong) NSTextField* pinField;
+@property (nonatomic, strong) NSTextField* deskPinField;
+@property (nonatomic, strong) NSButton*    deskButton;
 @property (nonatomic, strong) NSTextField* studio;
 @property (nonatomic, strong) NSArray<NSTextField*>* names;
 @property (nonatomic, strong) NSImageView* logoView;
@@ -82,6 +85,11 @@ int port(NSTextField* f)
     [g addRowWithViews:@[ label(@"Address"), self.address ]];
     self.pinField = [self field:@selector(pinChanged:) width:90];
     [g addRowWithViews:@[ label(@"PIN"), self.pinField ]];
+    self.deskPinField = [self field:@selector(deskPinChanged:) width:90];
+    self.deskButton = [NSButton buttonWithTitle:@"Open" target:self action:@selector(openDesk:)];
+    NSStackView* deskRow = [NSStackView stackViewWithViews:@[ self.deskPinField, self.deskButton ]];
+    deskRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    [g addRowWithViews:@[ label(@"Studio Control PIN"), deskRow ]];
     self.webPort = [self field:@selector(portsChanged:) width:90];
     [g addRowWithViews:@[ label(@"Page port"), self.webPort ]];
     self.sendPort = [self field:@selector(portsChanged:) width:90];
@@ -160,7 +168,7 @@ int port(NSTextField* f)
     if (!ph::saveSettings(s)) err = "Cannot write " + ph::settingsPath();
     else if (!pin.empty() && pin != ph::loadPin() && !ph::savePin(pin))
         err = "Cannot write the PIN to " + orc::supportDir();
-    ph::server().apply(s, pin);
+    ph::server().apply(s, pin, ph::server().deskPin());
     self.error.stringValue = str(err);
 }
 
@@ -172,6 +180,13 @@ int port(NSTextField* f)
     // ⛔ A PIN AS SOON AS IT IS ON (Frank 29.10.2026): the first switch-on
     // makes one, and the page shows it.
     if (s.enabled && !validPin(pin)) pin = ph::generatePin();
+    // Studio Control has its own, the same way.
+    std::string deskPin = ph::server().deskPin();
+    if (s.enabled && !validPin(deskPin)) {
+        deskPin = ph::generatePin();
+        if (!ph::saveDeskPin(deskPin)) self.error.stringValue = @"Cannot write the Studio Control PIN.";
+        ph::server().apply(ph::server().settings(), ph::server().pin(), deskPin);
+    }
     [self store:s pin:pin];
     if (self.onBox.window) [self refreshInWindow:self.onBox.window];
 }
@@ -186,6 +201,21 @@ int port(NSTextField* f)
     }
     [self store:ph::server().settings() pin:want];
 }
+
+- (void)deskPinChanged:(id)sender
+{
+    const std::string want = cstr(self.deskPinField.stringValue);
+    if (!validPin(want)) {
+        self.deskPinField.stringValue = str(ph::server().deskPin());
+        self.error.stringValue = @"The PIN is 4 to 8 digits.";
+        return;
+    }
+    if (!ph::saveDeskPin(want)) { self.error.stringValue = @"Cannot write the Studio Control PIN."; return; }
+    ph::server().apply(ph::server().settings(), ph::server().pin(), want);
+    self.error.stringValue = @"";
+}
+
+- (void)openDesk:(id)sender { orc::openStudioControl(); }
 
 - (void)portsChanged:(id)sender
 {
@@ -254,6 +284,8 @@ int port(NSTextField* f)
     if (!typing(self.sendPort)) self.sendPort.stringValue = @(s.sendPort).stringValue;
     if (!typing(self.recvPort)) self.recvPort.stringValue = @(s.recvPort).stringValue;
     if (!typing(self.pinField)) self.pinField.stringValue = str(ph::server().pin());
+    if (!typing(self.deskPinField)) self.deskPinField.stringValue = str(ph::server().deskPin());
+    self.deskButton.enabled = s.enabled && st.listening;
     if (!typing(self.studio))   self.studio.stringValue   = str(s.studio);
     for (int i = 0; i < 4; ++i)
         if (!typing(self.names[i])) self.names[i].stringValue = str(s.names[static_cast<size_t>(i)]);

@@ -149,7 +149,12 @@ int main()
             pin = ph::generatePin();
             ph::savePin(pin);
         }
-        ph::server().apply(ps, pin);
+        std::string deskPin = ph::loadDeskPin();
+        if (ps.enabled && deskPin.empty()) {
+            deskPin = ph::generatePin();
+            ph::saveDeskPin(deskPin);
+        }
+        ph::server().apply(ps, pin, deskPin);
         if (ps.enabled)
             orc::logLine("MoreMe: on, page port %d, TotalMix send %d, receive %d\n",
                          ps.webPort, ps.sendPort, ps.recvPort);

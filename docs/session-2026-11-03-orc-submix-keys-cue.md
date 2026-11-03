@@ -21,3 +21,19 @@ Auslöser: djp53 (Dave) im RME-Forum, Thread ORC, Posts 10 und 11. Frank: bauen,
 ## Offen
 - Die neuen ORC-Menüs nicht offscreen gerendert.
 - Kein Release. Altes Rea-Sixty mit neuem ORC: Tasten auf Werk, Bankart 15 fällt beim Laden weg (Parser-Grenze).
+
+## MoreMe: Performer und Studio Control (Frank: ins selbe Release)
+Plan: `docs/moreme-performers-plan.md`, alle Stufen gebaut.
+- `orc/Performers.*`: Modell, JSON, Desk-Befehle, `deskAllowed`. Datei `moreme-performers.json`, schreibt nur der Server-Thread. Desk-PIN `moreme.deskpin`.
+- `orc/Phones.*`: Mixe `perf:<link>` neben `phone<N>`, Quellen pro Mix (`sourcesOf_`), serverseitige Sperren (fremder Mix, fremde Quelle, Master, EQ/Dyn/FX nach Stufe), Strip-Seite mit Kurve aus `rmeu::eqModel` + `uf1eq::bandDb`.
+- `orc/moreme/desk.html`: Studio Control, QR-Encoder in JS (dekodiert mit CIDetector, Versionen 2 bis 10). Vorschau = die echte Handyseite im Frame.
+- `orc/moreme/moreme.html`: Link `/p/<id>`, Streifen im Hochformat über die vorhandene Ansicht, dB-Skala, EQ/DYN/FX am Streifen, Kopfzeile, Hell/Dunkel, Wisch-Hinweis, Doppeltipp, Meine Fader, EQ- und Dynamics-Seite.
+- `orc/OrcDeskWindow.mm`: eigenes Fenster mit WKWebView, PIN per User-Script, ATS `NSAllowsLocalNetworking`.
+- Abweichung vom Plan: Doppeltipp nicht auf dem Master (0 dB aus dem Nichts auf den Ohren).
+
+Geprüft: alle ctests, Mixer-Sperren als Test, Demo mit echtem Server und falschem TotalMix auf Systemports im Browser (Desk, Vorschau, EQ, Dyn, Streifen, Querformat, Hell, Meine Fader), WKWebView offscreen mit denselben ATS-Einstellungen.
+Nicht geprüft: am echten TotalMix und Handy; das ORC-Fenster und der Reiter im laufenden ORC.
+
+## Aus Franks Test
+- UF8-Meter: L = R, beide Balken nahmen den linken Kanal. Regel des UF1 übernommen.
+- UF8 und UF1 zeigen je ihre eigene Soft-Key-Bank (`uf8ScBank_`, `g_sideCarBankUf8`), ein Speicher.

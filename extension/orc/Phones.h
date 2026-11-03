@@ -24,6 +24,7 @@
 //   page ◀──config/snapshot/update/master/...── takeOut() ◀── sync(State)
 //
 
+#include "Performers.h"
 #include "RmeManager.h"
 #include "RmeState.h"
 
@@ -112,6 +113,13 @@ class Mixer {
     // "Phones N". Everybody inside sees the new name at once.
     void setNames(const std::array<std::string, 4>& n) { names_ = n; pushConfig_(); }
 
+    // ⇨ THE PERFORMERS (docs/moreme-performers-plan.md). Each is a mix of its own,
+    // "perf:<link>". While there is one, the Phones 1-4 list is gone: everybody
+    // is somebody. A change is on the phones at once.
+    void setPerformers(const std::vector<Performer>& v);
+    // The visible channels, for Studio Control's list.
+    std::string channelsJson() const { return sourcesJson_(std::string()); }
+
     // A WebSocket opened. `key` is clientKey() of the connection.
     int  open(const std::string& key);
     // It closed. Its headphone is free at once.
@@ -153,7 +161,11 @@ class Mixer {
     struct Client {
         std::string key;
         bool        authed = false;
-        std::string mix;        // "phone<N>", "" = none
+        std::string mix;        // "phone<N>", "perf:<link>", "" = none
+        std::string token;      // came in over this performer's link
+        std::string srcSig;     // the source list this client was last sent
+        std::string stripTarget, stripSent;   // the EQ/dynamics page it has open
+        std::map<std::string, double> fxSent; // FX send last sent, by source
         std::string cfgJson;    // the last config this client was sent
         bool        meters = true;               // switched off on the phone
         std::map<std::string, int> lvSent;       // half-dB steps last sent, by "m"/"in:3"
@@ -168,10 +180,25 @@ class Mixer {
 
     void        tryPin_(Client& c, const std::string& given, long long nowMs, int id);
     std::string configJson_(int forId) const;
-    std::string snapshotJson_(int phone) const;
-    std::string sourcesJson_() const;
+    std::string snapshotJson_(const std::string& mix) const;
+    struct Src {
+        std::string id, kind, label, colour;
+        int         n = 0;
+    };
+    std::vector<Src> sourcesOf_(const std::string& mix) const;
+    std::string sourcesJson_(const std::string& mix) const;
     void        pushConfig_();
     void        resnapViewers_();
+    void        snapTo_(int id, Client& c);
+    const Performer* perfOfMix_(const std::string& mix) const;
+    int         busOfMix_(const std::string& mix) const;
+    bool        srcAllowed_(const std::string& mix, const std::string& src) const;
+    int         stripLevel_(const std::string& mix, const std::string& target, const std::string& group) const;
+    bool        parseTarget_(const std::string& mix, const std::string& target, int& row, int& ch) const;
+    bool        stripMayWrite_(const std::string& mix, const std::string& target, const std::string& param) const;
+    std::string stripJson_(const std::string& mix, const std::string& target) const;
+    void        pushStrips_();
+    void        pushFx_();
     void        broadcastBus_(int bus, const std::function<std::string(const std::string&)>& make);
     int         busOfPhone_(int phone) const;
     int         holderOf_(const std::string& mixId) const;
@@ -182,6 +209,7 @@ class Mixer {
     PinChecker                         pin_;
     std::string                        version_ = "1";
     std::array<std::string, 4>         names_;
+    std::vector<Performer>             perf_;
     std::map<int, Client>              clients_;   // by id = by arrival, as stoerme's Set
     int                                nextId_ = 1;
     std::map<std::string, FailRecord>  fails_;
@@ -195,7 +223,6 @@ class Mixer {
     std::uint64_t                      round_  = 0;
     bool                               tmSeen_ = false;
     std::map<std::string, MuteMemo>    mute_;      // "bus:in:3"
-    std::string                        lastSources_;
 
     std::vector<std::pair<int, std::string>> outbox_;
     std::vector<Osc>                         oscQ_;

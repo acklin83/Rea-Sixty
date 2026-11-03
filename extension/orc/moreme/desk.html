@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studio Control</title>
+<!-- MoreMe's Studio Control (docs/moreme-performers-plan.md): served by ORC, local network only. -->
+<style>
+:root{--bg:#0D0D0D;--bg2:#161616;--bg3:#1f1f1f;--line:#2a2a2a;--fg:#fff;--fg2:#A8A8A8;--fg3:#666;--accent:#0099FF;--red:#690000;--red2:#a00000;--green:#3fcf6a;--rad:14px}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 Inter,system-ui,-apple-system,sans-serif}
+button,input,select{font:inherit;color:inherit}
+.top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--line)}
+.brand{font-weight:900;font-style:italic;font-size:20px;letter-spacing:-.02em;display:flex;align-items:center;gap:8px}
+.brand .lo{color:var(--red2)}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--green);flex:none}
+.dot.off{background:var(--red2)}
+.page{color:var(--fg2);font-weight:500}
+.warn{color:#f0c000;font-size:12px}
+.grow{flex:1}
+.snap{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.lbl{color:var(--fg3);font-size:12px}
+select,input[type=text],input[type=password]{background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:7px 10px;width:100%}
+.snap select{width:auto;max-width:200px}
+.b{background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer;white-space:nowrap}
+.b:hover{border-color:#444}
+.b.sm{padding:4px 10px;font-size:12px}
+.b.danger{color:#ff8080}
+.cols{display:grid;grid-template-columns:240px minmax(0,1fr) 372px;gap:12px;padding:12px 16px;align-items:start}
+.col{background:var(--bg2);border-radius:var(--rad);padding:14px}
+h2{margin:0 0 10px;font-size:12px;font-weight:700;color:var(--fg2);letter-spacing:.08em;text-transform:uppercase}
+h2:not(:first-child){margin-top:20px}
+.pf{display:flex;align-items:center;gap:10px;padding:10px;border-radius:10px;cursor:pointer;border:1px solid transparent}
+.pf:hover{background:var(--bg3)}
+.pf.on{background:var(--bg3);border-color:var(--accent)}
+.pf .sw{width:12px;height:12px;border-radius:50%;flex:none}
+.pf b{display:block;font-weight:700}
+.pf small{color:var(--fg2);font-size:12px}
+.st8{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.pill{font-size:10px;font-weight:700;padding:1px 5px;border-radius:4px;background:var(--bg);color:var(--fg3)}
+.pill.op{color:var(--accent)}
+.add{width:100%;margin-top:8px}
+.three{display:grid;grid-template-columns:1fr 1fr 1fr 44px;gap:10px}
+.three label{display:block;font-size:12px;color:var(--fg2)}
+.three label>*{margin-top:4px}
+input[type=color]{width:24px;height:24px;padding:0;border:none;background:none;border-radius:50%;cursor:pointer}
+.lay{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.fr{display:grid;grid-template-columns:44px 24px minmax(0,1fr) 170px 26px;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #202020}
+.fr.ro{padding:7px 0}
+.fr.ro .sw{width:14px;height:14px;border-radius:50%;justify-self:center}
+.src{color:var(--fg2);font-size:12px}
+.fr .x{background:none;border:none;color:var(--fg3);cursor:pointer;font-size:16px}
+.fr .x:hover{color:var(--fg)}
+.ud{display:flex;gap:2px}
+.ud button{background:var(--bg3);border:1px solid var(--line);border-radius:5px;width:21px;height:24px;padding:0;cursor:pointer;color:var(--fg2);font-size:11px}
+.ud button:hover{color:var(--fg)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chl{width:64px;align-self:center}
+.chip{background:var(--bg3);border:1px dashed #3a3a3a;border-radius:16px;padding:4px 11px;cursor:pointer;font-size:12px;color:var(--fg2)}
+.chip:hover{color:var(--fg);border-color:#666}
+.perm{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;align-items:center}
+.seg{display:inline-flex;background:var(--bg3);border-radius:8px;padding:2px}
+.seg button{background:none;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;color:var(--fg2);font-size:12px}
+.seg button.on{background:var(--accent);color:#000;font-weight:700}
+.note{color:var(--fg3);font-size:12px;margin:6px 0 8px}
+.lay .note{margin:0}
+.qr{display:flex;gap:12px;align-items:center}
+.qr canvas{background:#fff;border-radius:8px;padding:6px;width:120px;height:120px;flex:none;image-rendering:pixelated}
+.qr .act{display:flex;flex-direction:column;gap:6px;flex:1;min-width:0}
+.url{font-size:12px;color:var(--fg2);word-break:break-all}
+.phead{display:flex;justify-content:space-between;align-items:center}
+.frame{display:block;margin:10px auto 0;background:#000;border:6px solid #2c2c2c;border-radius:26px;width:344px;max-width:100%;height:660px}
+.frame.land{width:844px;height:390px;border-radius:22px;margin:12px auto 0}
+#wideSlot{padding:0 16px}
+.empty{color:var(--fg3);padding:24px 8px;text-align:center}
+#pinBox{position:fixed;inset:0;background:var(--bg);display:none;align-items:center;justify-content:center;z-index:50}
+#pinBox.open{display:flex}
+#pinBox form{width:280px;text-align:center}
+#pinBox input{text-align:center;font-size:20px;padding:12px;margin:12px 0}
+#pinErr{color:#ff8080;min-height:20px;font-size:13px}
+@media(max-width:1000px){.cols{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:560px){.three{grid-template-columns:1fr}.fr{grid-template-columns:44px 24px minmax(0,1fr) 100px 22px}}
+</style></head><body>
+<div class="top">
+  <div class="brand"><span class="dot off" id="dot"></span><span>More<span class="lo">Me</span></span></div>
+  <span class="page">Studio Control</span>
+  <span class="warn" id="tmWarn"></span>
+  <span class="grow"></span>
+  <div class="snap"><span class="lbl">Snapshot</span>
+    <select id="snapSel" aria-label="Snapshot"></select>
+    <button class="b" id="snapNew">New</button><button class="b" id="snapSave">Save</button><button class="b" id="snapAs">Save as</button><button class="b" id="snapDel">Delete</button>
+  </div>
+</div>
+<div id="wideSlot"></div>
+<div class="cols">
+  <div class="col">
+    <h2>Performers</h2>
+    <div id="list"></div>
+    <button class="b add" id="add">Add performer</button>
+  </div>
+  <div class="col" id="edit">
+    <h2>Performer</h2>
+    <div class="three">
+      <label>Name<input type="text" id="name" maxlength="64"></label>
+      <label>Role<input type="text" id="role" maxlength="64"></label>
+      <label>Output<select id="out"></select></label>
+      <label>Colour<input type="color" id="pcol"></label>
+    </div>
+    <h2>Faders</h2>
+    <div class="lay"><div class="seg" id="laySeg"></div><button class="b sm" id="copyL">Copy TotalMix layout</button><span class="note" id="layNote"></span></div>
+    <div id="faders"></div>
+    <div id="quick"></div>
+    <div class="perm" style="margin-top:12px"><span>Performer can hide and sort faders on the phone</span><div class="seg" data-k="hide" data-o="Off,Hide"></div></div>
+    <h2>Master</h2>
+    <div class="perm">
+      <span>Own output fader</span><div class="seg" data-k="master" data-o="Off,On"></div>
+      <span>EQ on own output</span><div class="seg" data-k="masterEq" data-o="Off,On"></div>
+      <span>Dynamics on own output</span><div class="seg" data-k="masterDyn" data-o="Off,On"></div>
+      <span>Auto Level on own output</span><div class="seg" data-k="masterAuto" data-o="Off,On"></div>
+    </div>
+    <div class="note">Only changes these headphones.</div>
+    <h2>Channel access</h2>
+    <div class="note">Changes the channel for everyone hearing it, and the recording.</div>
+    <div class="perm">
+      <span>EQ</span><div class="seg" data-k="chanEq" data-o="Off,Simple,Advanced" data-n="1"></div>
+      <span>Dynamics</span><div class="seg" data-k="chanDyn" data-o="Off,Simple,Advanced" data-n="1"></div>
+      <span>FX Send</span><div class="seg" data-k="fxSend" data-o="Off,On"></div>
+    </div>
+    <div style="margin-top:16px"><button class="b danger" id="remove">Delete performer</button></div>
+  </div>
+  <div class="col" id="right">
+    <h2>Link</h2>
+    <div class="qr"><canvas id="qr" width="232" height="232"></canvas>
+      <div class="act"><div class="url" id="url"></div><button class="b" id="copy">Copy</button><button class="b" id="share">Share</button><button class="b" id="open">Open</button></div>
+    </div>
+    <div class="note" id="pinNote"></div>
+    <div class="phead"><h2 style="margin:12px 0 0">Preview</h2>
+      <div class="seg" id="orient"><button class="on">Portrait</button><button>Landscape</button></div></div>
+    <div class="note">Moves the real mix.</div>
+    <div id="phSlot"><iframe class="frame" id="frame" title="Phone preview"></iframe></div>
+  </div>
+</div>
+<div id="pinBox"><form id="pinForm">
+  <div class="brand" style="justify-content:center"><span>More<span class="lo">Me</span></span></div>
+  <div class="page">Studio Control</div>
+  <input type="password" id="pinInput" inputmode="numeric" autocomplete="off" placeholder="PIN">
+  <button class="b" style="width:100%">Open</button>
+  <div id="pinErr"></div>
+</form></div>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let ws=null,S=null,curId=null,land=false,shownFrame=null,pendingDraw=false;
+let addWait=null;
+const P=()=>S&&S.book.performers.find(p=>p.id===curId)||null;
+const chan=id=>S.channels.find(c=>c.id===id);
+const srcText=id=>{const[k,n]=id.split(':');return(k==='in'?'In ':'PB ')+n};
+
+// ---- the link to ORC ----
+function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))}
+function connect(){
+  ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/deskws');
+  ws.onopen=()=>{$('#dot').classList.remove('off');send({t:'hello',pin:window.MOREME_DESK_PIN||localGet()||''})};
+  ws.onclose=()=>{$('#dot').classList.add('off');setTimeout(connect,1500)};
+  ws.onmessage=e=>{let m;try{m=JSON.parse(e.data)}catch(_){return}on(m)};
+}
+function localGet(){try{return localStorage.getItem('moreme.deskpin')}catch(_){return null}}
+function localSet(v){try{v?localStorage.setItem('moreme.deskpin',v):localStorage.removeItem('moreme.deskpin')}catch(_){}}
+let tried='';
+function on(m){
+  if(m.t==='pin'){
+    $('#pinBox').classList.add('open');
+    if(m.wrong){localSet('');$('#pinErr').textContent='Wrong PIN'}
+    else if(m.wait)$('#pinErr').textContent='Too many tries. Wait '+Math.ceil(m.wait/60)+' min.';
+    else $('#pinErr').textContent='';
+    $('#pinInput').focus();
+    return;
+  }
+  if(m.t==='state'){
+    if(tried){localSet(tried);tried=''}
+    $('#pinBox').classList.remove('open');
+    S=m;window.MOREME_PREVIEW_PIN=m.phonePin;
+    if(addWait){const n=m.book.performers.find(p=>!addWait.includes(p.id));if(n){curId=n.id;addWait=null}}
+    if(!P())curId=S.book.performers.length?S.book.performers[0].id:null;
+    $('#tmWarn').textContent=m.tmSeen?'':'TotalMix does not answer';
+    // Never rebuild under a cursor: what's being typed is newer than this.
+    const a=document.activeElement;
+    if(a&&a.tagName==='INPUT'&&a.type==='text'){pendingDraw=true;drawSoft();return}
+    draw();
+  }
+}
+$('#pinForm').onsubmit=e=>{e.preventDefault();const v=$('#pinInput').value.trim();if(!v)return;tried=v;send({t:'hello',pin:v});$('#pinInput').value=''};
+document.addEventListener('focusout',()=>setTimeout(()=>{if(pendingDraw){pendingDraw=false;draw()}},0));
+
+// ---- edits: into the local copy at once, to ORC right after ----
+let pushT=null;
+function push(now){
+  clearTimeout(pushT);
+  const p=P();if(!p)return;
+  const go=()=>send({t:'update',id:p.id,performer:p});
+  if(now)go();else pushT=setTimeout(go,250);
+}
+function changed(){drawList();push(true)}
+
+// ---- drawing ----
+function drawSoft(){drawSnap();drawList()}
+function draw(){drawSnap();drawList();drawEdit();drawRight()}
+function drawSnap(){
+  const sel=$('#snapSel'),b=S.book,names=Object.keys(b.snapshots).sort();
+  sel.innerHTML='<option value="">'+(b.current?'':'Not saved')+'</option>'+names.map(n=>'<option '+(n===b.current?'selected':'')+' value="'+esc(n)+'">'+esc(n)+'</option>').join('');
+  if(b.current)sel.options[0].remove();
+  $('#snapSave').disabled=false;
+  $('#snapDel').style.display=b.current?'':'none';
+}
+function drawList(){
+  const lv=['Off','Simple','Adv'];
+  $('#list').innerHTML=S.book.performers.map(p=>{
+    const o=S.outputs.find(x=>x.spec===p.output);
+    const count=p.useLayout?'TotalMix':p.faders.length+' faders';
+    return '<div class="pf '+(p.id===curId?'on':'')+'" data-i="'+p.id+'"><span class="sw" style="background:'+esc(p.colour||'#888888')+'"></span><div><b>'+esc(p.name||'Unnamed')+'</b><small>'
+      +esc((p.role?p.role+' · ':'')+(o?o.label:'No output'))+'</small><span class="st8"><span class="pill">'+count+'</span><span class="pill '+(p.chanEq?'op':'')+'">EQ '+lv[p.chanEq]+'</span><span class="pill '+(p.chanDyn?'op':'')+'">DYN '+lv[p.chanDyn]+'</span></span></div></div>';
+  }).join('')||'<div class="empty">Without performers, the phones pick Phones 1-4.</div>';
+  document.querySelectorAll('.pf').forEach(e=>e.onclick=()=>{curId=e.dataset.i;draw()});
+}
+function drawEdit(){
+  const p=P();
+  $('#edit').style.display=p?'':'none';$('#right').style.display=p?'':'none';
+  if(!p){$('#frame').removeAttribute('src');shownFrame=null;return}
+  $('#name').value=p.name;$('#role').value=p.role;
+  $('#pcol').value=p.colour||'#888888';
+  const known=S.outputs.some(o=>o.spec===p.output);
+  $('#out').innerHTML='<option value="">No output</option>'+S.outputs.map(o=>'<option value="'+esc(o.spec)+'">'+esc(o.label)+'</option>').join('')
+    +(p.output&&!known?'<option value="'+esc(p.output)+'">'+esc(p.output)+' (not visible)</option>':'');
+  $('#out').value=p.output;
+  drawFaders();drawSegs();
+}
+function drawFaders(){
+  const p=P(),isTm=p.useLayout;
+  $('#laySeg').innerHTML=['TotalMix layout','Own'].map((t,i)=>'<button class="'+((i===0)===isTm?'on':'')+'" data-l="'+i+'">'+t+'</button>').join('');
+  document.querySelectorAll('[data-l]').forEach(b=>b.onclick=()=>{
+    p.useLayout=b.dataset.l==='0';
+    if(!p.useLayout&&!p.faders.length)copyLayout(p);
+    drawFaders();changed();
+  });
+  $('#copyL').style.display=isTm?'none':'';
+  $('#layNote').textContent=isTm?'Follows TotalMix: visible channels, names and colours.':'';
+  if(isTm){
+    $('#faders').innerHTML=S.channels.map(c=>'<div class="fr ro"><span></span><span class="sw" style="background:'+esc(c.color)+'"></span><span>'+esc(c.label)+'</span><span class="src">'+srcText(c.id)+'</span><span></span></div>').join('')||'<div class="empty">TotalMix shows no channels.</div>';
+    $('#quick').innerHTML='';
+    return;
+  }
+  const options=x=>{
+    const list=S.channels.slice();
+    if(!chan(x.src))list.push({id:x.src,label:srcText(x.src)+' (not visible)'});
+    return list.map(c=>'<option value="'+c.id+'" '+(c.id===x.src?'selected':'')+'>'+esc(c.label)+' ('+srcText(c.id)+')</option>').join('');
+  };
+  $('#faders').innerHTML=p.faders.map((x,i)=>{
+    const c=chan(x.src);
+    return '<div class="fr"><span class="ud"><button data-up="'+i+'" aria-label="Up">&#8593;</button><button data-dn="'+i+'" aria-label="Down">&#8595;</button></span>'
+      +'<input type="color" value="'+esc(x.colour||(c&&c.color)||'#888888')+'" data-c="'+i+'" aria-label="Colour">'
+      +'<input type="text" maxlength="64" value="'+esc(x.name)+'" placeholder="'+esc(c?c.label:srcText(x.src))+'" data-n="'+i+'" aria-label="Name">'
+      +'<select data-s="'+i+'" aria-label="Source">'+options(x)+'</select>'
+      +'<button class="x" data-x="'+i+'" aria-label="Remove">&times;</button></div>';
+  }).join('')||'<div class="empty">No faders yet.</div>';
+  document.querySelectorAll('[data-c]').forEach(e=>e.oninput=()=>{p.faders[e.dataset.c].colour=e.value;push()});
+  document.querySelectorAll('[data-n]').forEach(e=>e.oninput=()=>{p.faders[e.dataset.n].name=e.value;push()});
+  document.querySelectorAll('[data-s]').forEach(e=>e.onchange=()=>{p.faders[e.dataset.s].src=e.value;drawFaders();changed()});
+  document.querySelectorAll('[data-x]').forEach(e=>e.onclick=()=>{p.faders.splice(+e.dataset.x,1);drawFaders();changed()});
+  const mv=(i,d)=>{const j=i+d;if(j<0||j>=p.faders.length)return;[p.faders[i],p.faders[j]]=[p.faders[j],p.faders[i]];drawFaders();changed()};
+  document.querySelectorAll('[data-up]').forEach(e=>e.onclick=()=>mv(+e.dataset.up,-1));
+  document.querySelectorAll('[data-dn]').forEach(e=>e.onclick=()=>mv(+e.dataset.dn,1));
+  const rest=k=>S.channels.filter(c=>c.kind===k&&!p.faders.some(f=>f.src===c.id));
+  const row=(l,k)=>rest(k).length?'<div class="chips"><span class="lbl chl">'+l+'</span>'+rest(k).map(c=>'<span class="chip" data-q="'+c.id+'">+ '+esc(c.label)+'</span>').join('')+'</div>':'';
+  $('#quick').innerHTML=row('Inputs','in')+row('Playbacks','pb');
+  document.querySelectorAll('[data-q]').forEach(e=>e.onclick=()=>{p.faders.push({src:e.dataset.q,name:'',colour:''});drawFaders();changed()});
+}
+function copyLayout(p){p.faders=S.channels.map(c=>({src:c.id,name:'',colour:''}))}
+function drawSegs(){
+  const p=P();
+  document.querySelectorAll('.seg[data-k]').forEach(s=>{
+    const o=s.dataset.o.split(','),k=s.dataset.k,num=!!s.dataset.n;
+    const cur=num?p[k]:(p[k]?1:0);
+    s.innerHTML=o.map((t,i)=>'<button class="'+(cur===i?'on':'')+'" data-v="'+i+'">'+t+'</button>').join('');
+    s.querySelectorAll('button').forEach(b=>b.onclick=()=>{p[k]=num?+b.dataset.v:b.dataset.v==='1';drawSegs();changed()});
+  });
+}
+function drawRight(){
+  const p=P();if(!p)return;
+  const url=S.base+'/p/'+p.id;
+  $('#url').textContent=url;
+  drawQr($('#qr'),url);
+  $('#pinNote').textContent='The phone asks for the PIN once: '+S.phonePin;
+  // ⛔ Moving a frame in the page reloads it: only when it really changes place.
+  const slot=land?$('#wideSlot'):$('#phSlot');
+  if($('#frame').parentElement!==slot)slot.appendChild($('#frame'));
+  $('#frame').className='frame'+(land?' land':'');
+  if(shownFrame!==p.id){shownFrame=p.id;$('#frame').src='/p/'+p.id+'?preview=1'}
+}
+
+// ---- controls ----
+$('#add').onclick=()=>{const before=S.book.performers.map(p=>p.id);addWait=before;send({t:'add'})};
+$('#remove').onclick=()=>{const p=P();if(p&&confirm('Delete '+(p.name||'this performer')+'? The link stops working.'))send({t:'remove',id:p.id})};
+$('#name').oninput=e=>{P().name=e.target.value;drawList();push()};
+$('#role').oninput=e=>{P().role=e.target.value;drawList();push()};
+$('#out').onchange=e=>{P().output=e.target.value;changed()};
+$('#pcol').oninput=e=>{P().colour=e.target.value;drawList();push()};
+$('#copyL').onclick=()=>{const p=P();if(p.faders.length&&!confirm('Replace this list with the TotalMix layout?'))return;copyLayout(p);drawFaders();changed()};
+$('#snapSel').onchange=e=>{if(e.target.value)send({t:'snapLoad',name:e.target.value})};
+$('#snapNew').onclick=()=>{if(confirm('Start empty? Performers not saved in a snapshot are gone.'))send({t:'snapNew'})};
+$('#snapSave').onclick=()=>{if(S.book.current)send({t:'snapSave'});else saveAs()};
+function saveAs(){const n=prompt('Snapshot name',S.book.current||'');if(n&&n.trim())send({t:'snapSave',name:n.trim()})}
+$('#snapAs').onclick=saveAs;
+$('#snapDel').onclick=()=>{if(S.book.current&&confirm('Delete the snapshot '+S.book.current+'?'))send({t:'snapDelete',name:S.book.current})};
+$('#copy').onclick=()=>{
+  const url=$('#url').textContent;
+  const done=()=>{$('#copy').textContent='Copied';setTimeout(()=>$('#copy').textContent='Copy',1200)};
+  if(navigator.clipboard&&window.isSecureContext)navigator.clipboard.writeText(url).then(done);
+  else{const t=document.createElement('textarea');t.value=url;document.body.appendChild(t);t.select();document.execCommand('copy');t.remove();done()}
+};
+if(!navigator.share)$('#share').style.display='none';
+$('#share').onclick=()=>{const p=P();navigator.share({title:'MoreMe '+p.name,url:$('#url').textContent}).catch(()=>{})};
+$('#open').onclick=()=>window.open($('#url').textContent,'_blank');
+document.querySelectorAll('#orient button').forEach((b,i)=>b.onclick=()=>{land=i===1;document.querySelectorAll('#orient button').forEach((x,j)=>x.classList.toggle('on',j===i));drawRight()});
+
+// ---- QR code: byte mode, level M, versions 1-10 (a link is short) ----
+function drawQr(cv,text){
+  const m=qrMatrix(text);if(!m)return;
+  const n=m.length,q=Math.floor(cv.width/n),o=Math.floor((cv.width-q*n)/2),g=cv.getContext('2d');
+  g.fillStyle='#fff';g.fillRect(0,0,cv.width,cv.height);g.fillStyle='#000';
+  for(let y=0;y<n;y++)for(let x=0;x<n;x++)if(m[y][x])g.fillRect(o+x*q,o+y*q,q,q);
+}
+function qrMatrix(text){
+  const data=Array.from(new TextEncoder().encode(text));
+  const ECC=[0,10,16,26,18,24,16,18,22,22,26],BLK=[0,1,1,1,2,2,4,4,4,5,5];
+  const rawBits=v=>{let r=(16*v+128)*v+64;if(v>=2){const a=Math.floor(v/7)+2;r-=(25*a-10)*a-55;if(v>=7)r-=36}return r};
+  let ver=0;
+  for(let v=1;v<=10;v++){
+    const cap=Math.floor(rawBits(v)/8)-ECC[v]*BLK[v],cc=v<10?8:16;
+    if(4+cc+data.length*8<=cap*8){ver=v;break}
+  }
+  if(!ver)return null;
+  const cap=Math.floor(rawBits(ver)/8)-ECC[ver]*BLK[ver],cc=ver<10?8:16;
+  const bits=[];const put=(v,l)=>{for(let i=l-1;i>=0;i--)bits.push((v>>>i)&1)};
+  put(4,4);put(data.length,cc);data.forEach(b=>put(b,8));
+  put(0,Math.min(4,cap*8-bits.length));
+  put(0,(8-bits.length%8)%8);
+  for(let p=0xEC;bits.length<cap*8;p^=0xEC^0x11)put(p,8);
+  const cw=[];for(let i=0;i<bits.length;i+=8)cw.push(parseInt(bits.slice(i,i+8).join(''),2));
+  // Reed-Solomon over GF(256)
+  const mul=(a,b)=>{let z=0;for(let i=7;i>=0;i--){z=(z<<1)^((z>>>7)*0x11D);z^=((b>>>i)&1)*a}return z&255};
+  const deg=ECC[ver],gen=new Array(deg).fill(0);gen[deg-1]=1;
+  for(let i=0,r=1;i<deg;i++){for(let j=0;j<deg;j++){gen[j]=mul(gen[j],r);if(j+1<deg)gen[j]^=gen[j+1]}r=mul(r,2)}
+  const rem=d=>{const o=new Array(deg).fill(0);d.forEach(b=>{const f=b^o.shift();o.push(0);gen.forEach((c,i)=>o[i]^=mul(c,f))});return o};
+  const total=Math.floor(rawBits(ver)/8),nb=BLK[ver],nShort=nb-total%nb,lenShort=Math.floor(total/nb);
+  const blocks=[];
+  for(let i=0,k=0;i<nb;i++){
+    const d=cw.slice(k,k+lenShort-deg+(i<nShort?0:1));k+=d.length;
+    const e=rem(d);if(i<nShort)d.push(0);
+    blocks.push(d.concat(e));
+  }
+  const all=[];
+  for(let i=0;i<blocks[0].length;i++)blocks.forEach((b,j)=>{if(i!==lenShort-deg||j>=nShort)all.push(b[i])});
+  // Modules
+  const size=ver*4+17,M=[],F=[];
+  for(let i=0;i<size;i++){M.push(new Array(size).fill(false));F.push(new Array(size).fill(false))}
+  const set=(x,y,v)=>{M[y][x]=!!v;F[y][x]=true};
+  for(let i=0;i<size;i++){set(6,i,i%2===0);set(i,6,i%2===0)}
+  const finder=(cx,cy)=>{for(let d=-4;d<=4;d++)for(let e=-4;e<=4;e++){const x=cx+e,y=cy+d;if(x>=0&&x<size&&y>=0&&y<size){const r=Math.max(Math.abs(e),Math.abs(d));set(x,y,r!==2&&r!==4)}}};
+  finder(3,3);finder(size-4,3);finder(3,size-4);
+  const pos=[];if(ver>1){const n=Math.floor(ver/7)+2,step=Math.floor((ver*8+3*n+5)/(4*n-4))*2;pos.push(6);for(let i=n-1,p=size-7;i>=1;i--,p-=step)pos.splice(1,0,p)}
+  pos.forEach((a,i)=>pos.forEach((b,j)=>{
+    if((i===0&&j===0)||(i===0&&j===pos.length-1)||(i===pos.length-1&&j===0))return;
+    for(let d=-2;d<=2;d++)for(let e=-2;e<=2;e++)set(a+e,b+d,Math.max(Math.abs(e),Math.abs(d))!==1);
+  }));
+  const format=mask=>{
+    const d=(0<<3)|mask;let r=d;for(let i=0;i<10;i++)r=(r<<1)^((r>>>9)*0x537);
+    const b=((d<<10)|r)^0x5412,g=i=>(b>>>i)&1;
+    for(let i=0;i<=5;i++)set(8,i,g(i));
+    set(8,7,g(6));set(8,8,g(7));set(7,8,g(8));
+    for(let i=9;i<15;i++)set(14-i,8,g(i));
+    for(let i=0;i<8;i++)set(size-1-i,8,g(i));
+    for(let i=8;i<15;i++)set(8,size-15+i,g(i));
+    set(8,size-8,true);
+  };
+  format(0);
+  if(ver>=7){
+    let r=ver;for(let i=0;i<12;i++)r=(r<<1)^((r>>>11)*0x1F25);
+    const b=(ver<<12)|r;
+    for(let i=0;i<18;i++){const v=(b>>>i)&1,x=size-11+i%3,y=Math.floor(i/3);set(x,y,v);set(y,x,v)}
+  }
+  // Data, zigzag
+  let bi=0;
+  for(let right=size-1;right>=1;right-=2){
+    if(right===6)right=5;
+    for(let vert=0;vert<size;vert++)for(let j=0;j<2;j++){
+      const x=right-j,up=((right+1)&2)===0,y=up?size-1-vert:vert;
+      if(!F[y][x]&&bi<all.length*8){M[y][x]=((all[bi>>>3]>>>(7-(bi&7)))&1)===1;bi++}
+    }
+  }
+  const maskFn=[(x,y)=>(x+y)%2===0,(x,y)=>y%2===0,(x,y)=>x%3===0,(x,y)=>(x+y)%3===0,(x,y)=>(Math.floor(x/3)+Math.floor(y/2))%2===0,(x,y)=>x*y%2+x*y%3===0,(x,y)=>(x*y%2+x*y%3)%2===0,(x,y)=>((x+y)%2+x*y%3)%2===0];
+  const applyMask=k=>{for(let y=0;y<size;y++)for(let x=0;x<size;x++)if(!F[y][x]&&maskFn[k](x,y))M[y][x]=!M[y][x]};
+  const penalty=()=>{
+    let p=0,dark=0;
+    const line=a=>{let run=1;for(let i=1;i<size;i++){if(a(i)===a(i-1)){run++;if(run===5)p+=3;else if(run>5)p++}else run=1}};
+    for(let i=0;i<size;i++){line(j=>M[i][j]);line(j=>M[j][i])}
+    for(let y=0;y<size;y++)for(let x=0;x<size;x++){if(M[y][x])dark++;if(y<size-1&&x<size-1&&M[y][x]===M[y][x+1]&&M[y][x]===M[y+1][x]&&M[y][x]===M[y+1][x+1])p+=3}
+    return p+Math.floor(Math.abs(dark*20-size*size*10)/(size*size))*10;
+  };
+  let best=0,low=Infinity;
+  for(let k=0;k<8;k++){applyMask(k);format(k);const p=penalty();if(p<low){low=p;best=k}applyMask(k)}
+  applyMask(best);format(best);
+  return M;
+}
+connect();
+</script>
+</body></html>
