@@ -14,6 +14,8 @@ Jeder Musiker bekommt sein eigenes Layout: eigener Ausgang, eigene Fader, eigene
 - Fader pro Performer mit einem Schalter: TotalMix-Layout oder Eigen. Neue Performer starten auf TotalMix-Layout.
   - TotalMix-Layout folgt laufend den sichtbaren Kanälen mit ihren Namen und Farben, Inputs dann Playbacks. Das ist der Satz, den die Seite heute schon zeigt (`Mixer::sourcesJson_`).
   - Eigen startet als Kopie des Layouts, wenn die eigene Liste leer ist. Der Knopf Copy TotalMix layout überschreibt die Liste. Zurück auf TotalMix-Layout lässt die eigene Liste stehen.
+- Der Performer wählt am Handy selbst: Streifen oder Liste, Hell oder Dunkel, Meter. Das gilt nur für sein Handy und ändert nichts an TotalMix.
+- Freigabe pro Performer, ob er Fader auf seinem Handy ausblenden und umsortieren darf: Off (ab Werk) oder Hide. Gespeichert auf dem Handy, Studio Control und die Vorschau zeigen weiter das eingerichtete Layout. Bei Off gilt das eingerichtete Layout, die gespeicherte Auswahl bleibt für später liegen. Kanäle hinzufügen kann nur der Tontechniker.
 - Fader hinzufügen: Liste aller sichtbaren Kanäle, die dieser Performer noch nicht hat, mit TotalMix-Namen, getrennt nach Inputs und Playbacks. Ein Fader ist ein Kanal, keine Gruppen. MoreMe kennt nur, was TotalMix liefert.
 - EQ, Dynamics und Auto Level auch auf dem eigenen Ausgang (Master-Fader): wirkt nur auf diese Kopfhörer.
 - EQ, Dynamics und FX Send auf Kanälen wirken auf alle, die den Kanal hören, und auf die Aufnahme: ab Werk gesperrt, Freigabe pro Performer Off, Simple, Advanced.
@@ -32,6 +34,7 @@ Jeder Musiker bekommt sein eigenes Layout: eigener Ausgang, eigene Fader, eigene
    - Kopfzeile mit Name, Rolle, Ausgang und dem Knopf Hell/Dunkel.
    - Hinweis, wenn rechts noch mehr Fader kommen.
    - Pan, Mute, Solo und die Meter bleiben.
+   - Die Wahl Streifen oder Liste und, wenn freigegeben, die Liste Meine Fader mit Ausblenden und Pfeilen liegen in den vorhandenen Einstellungen (Zahnrad).
 3. EQ: Grafik zum Ziehen mit Q und Werten, einfache Stufe Bass/Mid/Treble, Bypass. Kurve aus `Uf1EqCurve` auf dem Server, keine zweite Kopie in JavaScript. Parameter aus dem Katalog in `RmeStrip.cpp`.
 4. Dynamics und Auto Level: Kompressor, Expander, Auto Level mit Kennlinie, einfache Stufe. FX Send (`/input/<n>/fxsend`) gesperrt mit dabei.
 5. Tests (nur Ports vom System, nie 7003/7004 auf Franks Mac), Handbuch, Website, alle Sprachen der Seite.
