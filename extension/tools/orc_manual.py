@@ -3,7 +3,7 @@
 
 The manual is one HTML page. The prose is hand-written in
 extension/orc/manual/template.html; every list the code knows better is filled
-in from orc_manual_dump (the actions, the factory banks, the STRIP pages with
+in from orc_manual_dump (the actions, the factory banks, the channel pages with
 their ranges and push defaults, the reverb types) or read straight out of the
 sources (version, minimum macOS, libusb version, the fine factor).
 

@@ -105,7 +105,7 @@ svg a:hover .knob, svg a:focus .knob { fill: var(--accent); }
     <li><a href="#menubar">The menu bar</a></li>
     <li><a href="#rows">Rows, channels and the submix</a></li>
     <li><a href="#surface">The UF1, control by control</a></li>
-    <li><a href="#strip">STRIP: one channel in detail</a></li>
+    <li><a href="#strip">Channel pages: one channel in detail</a></li>
     <li class="sub"><a href="#reverb">Reverb types</a></li>
     <li><a href="#uf8">The UF8, control by control</a></li>
     <li><a href="#uf8-chanview">The UF8's channel view</a></li>
@@ -226,7 +226,7 @@ REAPER leaves the UF1 with ORC.</p>
 (<a href="#uf8">the UF8</a>), and the same key again goes back to REAPER. The TotalMix mode needs
 ORC installed.</p>
 <h3>One set of settings</h3>
-<p>ORC keeps the settings and Rea-Sixty reads them: pot targets, soft-key banks, colours, STRIP
+<p>ORC keeps the settings and Rea-Sixty reads them: pot targets, soft-key banks, colours, channel
 pages. Change them in ORC and REAPER picks them up. Without ORC installed, Rea-Sixty offers no
 TotalMix view at all.</p>
 <p>Hue, DynaMount and OBS are kept by each program on its own, so each works without the other,
@@ -402,14 +402,14 @@ writes: <code>&gt; Main</code> for an input or a playback (the <a href="#rows">s
 <div class="ctl" id="c-softkeys" data-btn="kDisplaySoft1 kDisplaySoft2 kDisplaySoft3 kDisplaySoft4">
 <h3>The four keys above the large screen</h3>
 <p>In the overview they are the <a href="#softkeys">soft-key banks</a>. With
-<a href="#strip">STRIP</a> open they are the switches of the page on screen.</p>
+the <a href="#strip">channel pages</a> open they are the switches of the page on screen.</p>
 </div>
 
 <div class="ctl" id="c-screen">
 <h3>Large screen</h3>
 <p>In the overview: the four pot targets with their names and levels, a colour bar over each, and
 a white bar over the pot whose output is the current submix. The header names the row and the
-soft-key bank. The time display shows the level of the jog wheel's target in dB. With STRIP open:
+soft-key bank. The time display shows the level of the jog wheel's target in dB. With the channel pages open:
 the page name and number, and on the EQ and Low Cut pages the channel's EQ curve.</p>
 </div>
 
@@ -420,41 +420,41 @@ Turning sets the target's level in steps of {{potStepDb}} dB. A push does what i
 on the settings page <a href="#set-controls">UF1</a>: make it the submix, put it on the fader,
 mute it, or nothing. Out of the box every push picks the submix, and the targets are:</p>
 <!--GEN:pots-->
-<p><strong>STRIP.</strong> The page's parameters. A push sets the parameter back to its default,
-listed with each page under <a href="#strip">STRIP</a>.</p>
+<p><strong>Channel pages.</strong> The page's parameters. A push sets the parameter back to its default,
+listed with each page under <a href="#strip">channel pages</a>.</p>
 <p>After a push the same pot ignores turning for {{pushQuietMs}} ms, so the small twist that comes
 with a press does not move the value you just set.</p>
 </div>
 
 <div class="ctl" id="c-58" data-btn="k5to8">
 <h3>5-8</h3>
-<p>Switches the four pots between their two banks. Lit on bank 2. Does nothing with STRIP open.</p>
+<p>Switches the four pots between their two banks. Lit on bank 2. Does nothing with the channel pages open.</p>
 </div>
 
 <div class="ctl" id="c-arrows" data-btn="kArrowLeft kArrowRight">
 <h3>&lt; and &gt;</h3>
-<p>In the overview: the previous and next <a href="#softkeys">soft-key bank</a>. With STRIP open:
+<p>In the overview: the previous and next <a href="#softkeys">soft-key bank</a>. With the channel pages open:
 the previous and next page. Lit where there is more in that direction; there is no wrap.</p>
 </div>
 
 <div class="ctl" id="c-bank" data-btn="kBankLeft kBankRight">
 <h3>BANK ◄ ►</h3>
 <p>Picks the half of the soft-key bank on the four keys: ◄ keys 1 to 4, ► keys 5 to 8. Lit toward
-the half you can switch to. Dark when the bank has no second half, and with STRIP open.</p>
+the half you can switch to. Dark when the bank has no second half, and with the channel pages open.</p>
 </div>
 
 <div class="ctl" id="c-channel" data-enc="kChannel" data-btn="kChannelPush">
 <h3>CHANNEL encoder</h3>
 <p>Turn: the previous or next channel of the row onto the fader. When that channel sits on a pot
-of the other bank, the pots follow to that bank. Push: opens and closes
-<a href="#strip">STRIP</a> for the channel on the fader.</p>
+of the other bank, the pots follow to that bank. Push: opens and closes the
+<a href="#strip">channel pages</a> for the channel on the fader.</p>
 </div>
 
 <div class="ctl" id="c-nav" data-btn="kNavUp kNavDown kNavLeft kNavRight kNavCentre">
 <h3>Nav cross</h3>
 <table class="data"><tbody>
 <tr><th>Up, down</th><td>The previous or next row: Input, Playback, Output, FX, and round again.
-With STRIP open the view stays open on the new row's channel.</td></tr>
+With the channel pages open the view stays open on the new row's channel.</td></tr>
 <tr><th>Left, right</th><td>The previous or next <a href="#rows">submix</a>, round the visible outputs.</td></tr>
 <tr><th>Centre</th><td>Shows or hides the TotalMix window. Lit while shown.</td></tr>
 </tbody></table>
@@ -495,7 +495,7 @@ Controls that step through a list, such as an EQ type, still move one entry at a
 </section>
 
 <section id="strip">
-<h2>STRIP: one channel in detail</h2>
+<h2>Channel pages: one channel in detail</h2>
 <p>Push the CHANNEL encoder and the UF1 shows the channel on the fader in detail: its settings in
 TotalMix, four pots and four keys to a page. Push again to go back to the overview.</p>
 <ul>
@@ -967,7 +967,7 @@ of the normal step. In TotalMix, FINE and a SEND/PLUG-IN key or a key of a submi
 {{jogStepDb}} dB, as the UF1's jog wheel. Target and step are on the settings page
 <a href="#set-controls">UF1</a>. In TotalMix, Main stands on strip 8 for two seconds while
 you turn (<a href="#set-uf8">Show Main volume on change</a>). A push opens and closes the
-<a href="#uf8-chanview">channel view</a>, as PLUG-IN does and as the push opens STRIP on the UF1.</p>
+<a href="#uf8-chanview">channel view</a>, as PLUG-IN does and as the push opens the channel pages on the UF1.</p>
 </div>
 
 <div class="ctl" id="u-bank" data-uf8="kBankLeft kBankRight">
@@ -1012,7 +1012,7 @@ every mode.</p>
 <section id="uf8-chanview">
 <h2>The UF8's channel view</h2>
 <p>PLUG-IN in TotalMix, or a push on the CHANNEL encoder, puts the selected channel's
-<a href="#strip">STRIP</a> pages on the UF8. Press it again to go back to the overview.</p>
+<a href="#strip">channel pages</a> on the UF8. Press it again to go back to the overview.</p>
 <ul>
   <li>The soft keys pick the page: each key is one page, and the page showing is lit. PAGE ◄ ► step
       to the previous and next page, and are lit where there is one.</li>
@@ -1022,7 +1022,7 @@ every mode.</p>
       so every reverb type but Envelope fits on one page. Soft key 8 switches the
       effect on and off: bright while on, dim while off. CUT on its strip does the same.</li>
   <li>A push on a control sets it back to its default, the last column of the page list under
-      <a href="#strip">STRIP</a>.</li>
+      <a href="#strip">channel pages</a>.</li>
   <li>The faders stay the eight channels' levels. The UF8 shows values as numbers; the EQ curve is
       the UF1's.</li>
 </ul>
@@ -1364,7 +1364,7 @@ incoming connections; allow it.</p>
 <h2>Files</h2>
 <table class="data"><tbody>
 <tr><th><code>~/Library/Application Support/ORC/rme.json</code></th><td>The link, the pots, the colours
-and the STRIP pages.</td></tr>
+and the channel pages.</td></tr>
 <tr><th><code>~/Library/Application Support/ORC/orc.json</code></th><td>The soft-key banks and the
 transport keys.</td></tr>
 <tr><th><code>~/Library/Application Support/ORC/modes</code></th><td>Hue, DynaMount and OBS, one file
