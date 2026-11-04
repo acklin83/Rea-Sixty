@@ -502,6 +502,12 @@ std::vector<Mixer::Src> Mixer::sourcesOf_(const std::string& mix) const
         };
         // ⛔ A GROUP COMES WHOLE. The list says what shows, the submix what is heard:
         // a member left out would be in the headphones with no fader to reach it.
+        // Only a group on the list counts (Frank 04.11.2026: take it off the list and
+        // it is off the phone); its channels listed one by one are plain faders then.
+        auto listed = [&](const Group& g) {
+            return std::any_of(p->faders.begin(), p->faders.end(),
+                               [&](const Fader& f) { return f.src == "group:" + g.id; });
+        };
         auto wholeGroup = [&](const Group& g) {
             for (const std::string& m : g.members) {
                 std::string kind; int n = 0;
@@ -516,9 +522,9 @@ std::vector<Mixer::Src> Mixer::sourcesOf_(const std::string& mix) const
             }
             std::string kind; int n = 0;
             if (!splitSrc(f.src, kind, n) || !visible(kind, n)) continue;
-            if (const Group* g = groupOfSrc_(f.src)) wholeGroup(*g);
+            if (const Group* g = groupOfSrc_(f.src); g && listed(*g)) wholeGroup(*g);
             else if (!once(f.src)) continue;
-            else out.push_back(look(kind, n));
+            else { Src x = look(kind, n); x.group.clear(); out.push_back(std::move(x)); }
             for (Src& x : out) {
                 if (x.id != f.src) continue;
                 if (!f.name.empty())   x.label  = f.name;

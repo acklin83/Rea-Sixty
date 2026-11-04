@@ -749,8 +749,8 @@ int main()
         mx.message(a, R"({"t":"groupSet","mix":"phone1","group":"nobody1","val":0})", 0);
         EXPECT(mx.takeOsc().empty());
 
-        // ⛔ A performer with one member gets the whole group: the rest is in the
-        // headphones whether a fader shows it or not.
+        // A group on a performer's own list comes whole: the rest is in the headphones
+        // whether a fader shows it or not. Off the list, it is off the phone.
         Mixer pm;
         rme::State ps = rig();
         pm.sync(ps, vis(1, { 1, 2 }, { 0 }), true);
@@ -764,18 +764,37 @@ int main()
         pm.message(c, R"({"t":"select","mix":"perf:perfone1"})", 0);
         out = pm.takeOut();
         snap = to(out, c);
-        EXPECT(has(snap, R"("id":"in:1")") && has(snap, R"("id":"in:2")") && !has(snap, R"("id":"pb:0")"));
+        EXPECT(has(snap, R"("id":"in:1")") && !has(snap, R"("id":"in:2")") && !has(snap, R"("id":"pb:0")"));
         EXPECT(has(snap, R"("label":"My Kick")"));
-        EXPECT(has(snap, R"("groups":[{"group":"drums1")"));
-        // And the group's own entry brings it too, on its own.
+        EXPECT(has(snap, R"("groups":[])") && !has(snap, R"("group":"drums1")"));
+        // On the list, with a member listed as well: the whole group, once.
         ph::Performer q = p;
-        q.faders = { ph::Fader{ "group:drums1", "", "" } };
+        q.faders.push_back(ph::Fader{ "group:drums1", "", "" });
         pm.setPerformers({ q });
         pm.takeOut();
         pm.message(c, R"({"t":"select","mix":"perf:perfone1"})", 0);
         out = pm.takeOut();
         snap = to(out, c);
-        EXPECT(has(snap, R"("id":"in:1")") && has(snap, R"("id":"in:2")"));
+        EXPECT(has(snap, R"("id":"in:1")") && has(snap, R"("id":"in:2")") && !has(snap, R"("id":"pb:0")"));
+        EXPECT(has(snap, R"("label":"My Kick")") && has(snap, R"("groups":[{"group":"drums1")"));
+        // Off the list again, and the phone is told at once.
+        pm.takeOut();
+        pm.setPerformers({ p });
+        out = pm.takeOut();
+        snap = to(out, c);
+        EXPECT(has(snap, R"("groups":[])") && !has(snap, R"("id":"in:2")"));
+        // The group gone altogether, for whoever is on TotalMix' layout.
+        ph::Performer r = p;
+        r.useLayout = true;
+        pm.setPerformers({ r });
+        pm.takeOut();
+        pm.message(c, R"({"t":"select","mix":"perf:perfone1"})", 0);
+        out = pm.takeOut();
+        EXPECT(has(to(out, c), R"("groups":[{"group":"drums1")"));
+        pm.setGroups({});
+        out = pm.takeOut();
+        snap = to(out, c);
+        EXPECT(has(snap, R"("groups":[])") && !has(snap, R"("group":"drums1")"));
     }
 
     if (g_fail) { std::printf("test_orc_phones: %d failure(s)\n", g_fail); return 1; }
