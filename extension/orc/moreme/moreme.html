@@ -364,10 +364,6 @@ body.light #toast{background:#fff;border-color:#c4c7cc}
   <div class="panel">
     <button class="close" id="setClose" aria-label="close">✕</button>
     <h2 data-t="settings">Einstellungen</h2>
-    <div id="myBox" class="hidden">
-      <label data-t="myFaders">Meine Fader</label>
-      <div id="myList"></div>
-    </div>
     <label data-t="mix" id="setTrackLabel">Kopfhörer-Mix</label>
     <select id="setTrack" style="width:100%;background:var(--bg3);border:1px solid #2a2a2a;color:var(--fg);padding:12px;border-radius:10px;font:inherit;font-size:16px"></select>
     <label data-t="view">Ansicht</label>
@@ -400,6 +396,10 @@ body.light #toast{background:#fff;border-color:#c4c7cc}
     <div class="actions">
       <button class="sec" id="setCancel" data-t="cancel">Abbrechen</button>
       <button id="setSave" data-t="save">Speichern</button>
+    </div>
+    <div id="myBox" class="hidden">
+      <label data-t="myFaders">Meine Fader</label>
+      <div id="myList"></div>
     </div>
     <div class="actions">
       <button class="danger" id="setReset" data-t="reset">Gerät zurücksetzen</button>
