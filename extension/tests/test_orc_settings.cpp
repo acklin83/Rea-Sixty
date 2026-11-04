@@ -679,7 +679,7 @@ static void testPageHasEverything(const std::string& res)
     EXPECT(!has(st, "\"usb\""));
 #endif
     for (const char* word : {
-        "General", "Soft Keys", "Colours", "UF8 Modes", "MoreMe", "Studio Control", "Setup",
+        "General", "Soft Keys", "Colours", "UF8 Modes", "MoreMe", "Setup",
         "Talk to TotalMix", "Open at login", "Host", "Send to port", "Listen on port", "Status",
         "Ask TotalMix again", "Sleep when idle", "After", "minutes",
         "Use the UF1", "Target", "Push", "Jog wheel", "Jog step", "Pot step", "V-Pot speed", "Transport",

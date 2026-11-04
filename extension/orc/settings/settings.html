@@ -50,7 +50,7 @@ input::placeholder{color:var(--fg3)}
 .main.full{display:flex;flex-direction:column}
 .main.full #err{padding:8px 16px 0}
 .main.full #pages{flex:1;min-height:0}
-/* MoreMe: the line and the setup above, Studio Control in all the room below. */
+/* MoreMe: the line and the setup above, the performers in all the room below. */
 #pg-moreme.on{display:flex;flex-direction:column;height:100%}
 #mmHead{flex:none;max-height:60%;overflow:auto}
 .main.full #mmHead{padding:10px 16px;border-bottom:1px solid var(--line)}
@@ -245,8 +245,8 @@ const DRAW={
 // ---- drawing ----
 $('#nav').innerHTML=PAGES.map(p=>'<button type="button" data-p="'+p[0]+'">'+p[1]+'</button>').join('');
 $('#pages').innerHTML=PAGES.map(p=>'<div class="page" id="pg-'+p[0]+'"></div>').join('');
-// ⛔ The frame stays where it is: moving or rebuilding it would reload Studio Control.
-$('#pg-moreme').innerHTML='<div id="mmHead"></div><iframe id="desk" title="Studio Control" allow="clipboard-write"></iframe>';
+// ⛔ The frame stays where it is: moving or rebuilding it would reload the performers.
+$('#pg-moreme').innerHTML='<div id="mmHead"></div><iframe id="desk" title="MoreMe" allow="clipboard-write"></iframe>';
 const inMenu=()=>menuOpen&&Date.now()-menuAt<60000;
 // Never rebuild under a cursor or an open menu: what is being typed or picked is newer than this.
 function busy(){
@@ -258,7 +258,7 @@ function draw(){
   $('#err').textContent=S.error||'';
   document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.p===page));
   document.querySelectorAll('.page').forEach(p=>p.classList.toggle('on',p.id==='pg-'+page));
-  // Studio Control needs MoreMe's page. Without it the setup is all there is.
+  // The performers need MoreMe's page. Without it the setup is all there is.
   const withDesk=page==='moreme'&&!!S.moreme.desk;
   $('#main').classList.toggle('full',withDesk);
   if(page==='moreme'&&deskSrc!==S.moreme.desk){

@@ -250,7 +250,7 @@ std::string serve(const ws::Request& r, const Settings& s, const std::string& re
     }
     if (r.path == "/desk") {
         if (!deskAllowed(peer, r.header("x-real-ip"), r.header("x-forwarded-for"), r.header("host"), {}))
-            return ws::response(403, "text/plain; charset=utf-8", "Studio Control answers on this computer only");
+            return ws::response(403, "text/plain; charset=utf-8", "This page answers on this computer only");
         const std::string page = orc_handover::readFile(res + "/desk.html");
         if (page.empty()) return ws::response(404, "text/plain; charset=utf-8", "not found");
         return ws::response(200, "text/html; charset=utf-8", page);
@@ -456,7 +456,7 @@ void Server::loop()
             // ⛔ This Mac only, and never through the reverse proxy.
             if (!deskAllowed(c.peer, r.header("x-real-ip"), r.header("x-forwarded-for"),
                              r.header("host"), r.header("origin"))) {
-                orc::logLine("MoreMe: Studio Control refused for %s\n", c.peer.c_str());
+                orc::logLine("MoreMe: its setup page refused for %s\n", c.peer.c_str());
                 queue(c, ws::response(403, "text/plain; charset=utf-8", "this computer only"));
                 c.closing = true;
                 return;

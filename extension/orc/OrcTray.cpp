@@ -170,7 +170,7 @@ void showMenu(POINT at)
         ::AppendMenuW(m, MF_STRING, kCopyAddress, widen(lines.addressLine).c_str());
         ::AppendMenuW(m, MF_OWNERDRAW, kQrImage, nullptr);
     }
-    if (lines.deskShown) ::AppendMenuW(m, MF_STRING, kStudioControl, L"Studio Control…");
+    if (lines.deskShown) ::AppendMenuW(m, MF_STRING, kStudioControl, L"MoreMe…");
     ::AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(m, MF_STRING, kSettings, L"Settings…");
     ::AppendMenuW(m, MF_STRING, kManual, L"Manual");

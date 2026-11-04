@@ -134,7 +134,7 @@ static NSImage* qrImage(NSString* text, CGFloat side)
             _moremeQr.view = box;
         }
         [menu addItem:_moremeQr];
-        _moremeDesk = [[NSMenuItem alloc] initWithTitle:@"Studio Control…" action:@selector(openStudioControl:)
+        _moremeDesk = [[NSMenuItem alloc] initWithTitle:@"MoreMe…" action:@selector(openStudioControl:)
                                           keyEquivalent:@""];
         _moremeDesk.target = self;
         [menu addItem:_moremeDesk];
