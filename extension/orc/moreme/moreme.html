@@ -291,7 +291,10 @@ body{
 .my .sw{width:12px;height:12px;border-radius:50%;flex:none}
 .my button{background:var(--bg3);border:none;border-radius:6px;color:var(--fg);font:inherit;font-size:13px;padding:5px 9px;cursor:pointer}
 .my .grip{flex:none;width:32px;text-align:center;font-size:20px;line-height:1;color:var(--fg3);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;padding:6px 0}
-.my.dragging{background:var(--bg3);border-radius:8px;outline:1px solid var(--accent)}
+.my.dragging,.mygrp.dragging{background:var(--bg3);border-radius:8px;outline:1px solid var(--accent)}
+.my.sub{padding-left:32px}
+.my.sub .n{font-size:14px}
+.mygrp.off .my.sub{display:none}
 
 /* STRIP PAGE: EQ and dynamics */
 #strip{position:fixed;inset:0;z-index:90;background:var(--bg);display:none;flex-direction:column;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
@@ -652,7 +655,8 @@ let state = {
   mixId: null,          // selected mix id
   selName: '',
   recvs: [],            // per-source values, same index order as state.sources: [{vol(amp),pan,mute}]
-  groups: [],           // [{id,label,color,vol,db,mute,solo}] from the snapshot
+  groups: [],           // [{id,label,color,vol,db,mute,solo}] from the snapshot, as shown here
+  allGroups: [],        // the same with those hidden on this phone
   master: {vol:1, mute:0},
   lastReplyT: 0,
   connected: false,
@@ -876,7 +880,9 @@ function handleMsg(m){
         const v = (m.values && m.values[s.id]) || {};
         return { vol: dbToAmp(v.db != null ? v.db : -300), pan: v.pan || 0, mute: v.mute ? 1 : 0, solo: v.solo ? 1 : 0, fx: v.fx != null ? v.fx : -65 };
       });
-      state.groups = (m.groups || []).map(g=>({ id:g.group, label:g.label, color:g.color, vol:dbToAmp(g.db), db:g.db, mute:g.mute?1:0, solo:g.solo?1:0 }));
+      state.allGroups = (m.groups || []).map(g=>({ id:g.group, label:g.label, color:g.color, vol:dbToAmp(g.db), db:g.db, mute:g.mute?1:0, solo:g.solo?1:0 }));
+      // Hidden here, moved all the same: what the fader does stays what ORC knows.
+      state.groups = state.allGroups.filter(g=>!(state.mayHide && !PREVIEW && mineGet().hid.includes('group:'+g.id)));
       state.master.vol = dbToAmp((m.master&&m.master.db) != null ? m.master.db : -300);
       state.master.mute = (m.master&&m.master.mute) ? 1 : 0;
       state.master.shown = !(m.master && m.master.shown === 0);
@@ -1596,13 +1602,14 @@ function mineGet(){
 }
 function mineOrdered(list){
   const my = mineGet();
-  const at = s => { const k = my.ord.indexOf(s.id); return k < 0 ? 1e6 : k; };
+  // A group sorts as one, under its own name.
+  const at = s => { const k = my.ord.indexOf(s.group ? 'group:'+s.group : s.id); return k < 0 ? 1e6 : k; };
   return list.map((s,i)=>({s,i})).sort((a,b)=>at(a.s)-at(b.s) || a.i-b.i).map(x=>x.s);
 }
 function applyMine(list){
   if (!state.mayHide || PREVIEW) return list.slice();
   const my = mineGet();
-  return mineOrdered(list).filter(s=>!my.hid.includes(s.id));
+  return mineOrdered(list).filter(s=>!my.hid.includes(s.id) && !(s.group && my.hid.includes('group:'+s.group)));
 }
 function mineSave(my){
   localStorage.setItem(mineKey(), JSON.stringify(my));
@@ -1616,10 +1623,26 @@ function drawMine(){
   box.classList.toggle('hidden', !on);
   if (!on) return;
   const my = mineGet(), list = mineOrdered(state.allSources || []);
+  const row = (id, label, color, cls, grip) => {
+    const off = my.hid.includes(id);
+    return '<div class="my'+cls+(off?' off':'')+'"'+(grip?' data-row="'+escapeHtml(id)+'"':'')+'>'
+         + (grip==='g' ? '<span class="grip" aria-label="drag to sort">≡</span>' : '')
+         + '<span class="sw" style="background:'+escapeHtml(color||'#888888')+'"></span><span class="n">'+escapeHtml(label)+'</span>'
+         + '<button data-eye="'+escapeHtml(id)+'">'+escapeHtml(t(off?'show':'hide'))+'</button></div>';
+  };
+  // ⇨ A GROUP IS ONE ROW TO SORT, its channels below it to hide one by one. The whole
+  // block is what the grip moves, so the block carries data-row.
+  const done = new Set();
   $('myList').innerHTML = list.map(s=>{
-    const off = my.hid.includes(s.id);
-    return '<div class="my'+(off?' off':'')+'" data-row="'+escapeHtml(s.id)+'"><span class="grip" aria-label="drag to sort">≡</span><span class="sw" style="background:'+escapeHtml(s.color)+'"></span><span class="n">'+escapeHtml(s.label)+'</span>'
-         + '<button data-eye="'+escapeHtml(s.id)+'">'+escapeHtml(t(off?'show':'hide'))+'</button></div>';
+    const g = s.group && state.allGroups.find(x=>x.id===s.group);
+    if (!g) return row(s.id, s.label, s.color, '', 'g');
+    if (done.has(g.id)) return '';
+    done.add(g.id);
+    const off = my.hid.includes('group:'+g.id);
+    return '<div class="mygrp'+(off?' off':'')+'" data-row="group:'+escapeHtml(g.id)+'">'
+         + row('group:'+g.id, g.label, g.color, '', false).replace('<span class="sw"', '<span class="grip" aria-label="drag to sort">≡</span><span class="sw"')
+         + list.filter(x=>x.group===g.id).map(x=>row(x.id, x.label, x.color, ' sub', false)).join('')
+         + '</div>';
   }).join('');
   $('myList').querySelectorAll('[data-eye]').forEach(b=>b.onclick=()=>{
     const id = b.dataset.eye, m = mineGet();

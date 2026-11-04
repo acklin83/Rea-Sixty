@@ -74,6 +74,7 @@ input[type=color]{width:24px;height:24px;padding:0;border:none;background:none;b
 .grh .x{background:none;border:none;color:var(--fg3);cursor:pointer;font-size:16px}
 .grh .x:hover{color:var(--fg)}
 .chip.in{border-style:solid;border-color:var(--accent);color:var(--fg)}
+.addch{margin-top:10px;width:100%}
 .chl{width:64px;align-self:center}
 .chip{background:var(--bg3);border:1px dashed #3a3a3a;border-radius:16px;padding:4px 11px;cursor:pointer;font-size:12px;color:var(--fg2)}
 .chip:hover{color:var(--fg);border-color:#666}
@@ -222,6 +223,11 @@ function pushGroups(now){
   const go=()=>send({t:'groups',groups:S.book.groups});
   if(now)go();else pushG=setTimeout(go,250);
 }
+// With every channel in the layout that is close to a hundred: a menu, by kind.
+const chanOptions=list=>[['in','Inputs'],['pb','Playbacks']].map(([k,l])=>{
+  const o=list.filter(c=>c.kind===k);
+  return o.length?'<optgroup label="'+l+'">'+o.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.label)+'</option>').join('')+'</optgroup>':'';
+}).join('');
 function drawGroups(){
   const gs=S.book.groups;
   const taken=new Set(gs.flatMap(g=>g.members));
@@ -230,15 +236,15 @@ function drawGroups(){
     +'<div class="grh"><input type="color" value="'+esc(g.colour||'#0099ff')+'" data-gc="'+i+'" aria-label="Colour">'
     +'<input type="text" maxlength="64" value="'+esc(g.name)+'" placeholder="Group name" data-gn="'+i+'" aria-label="Name">'
     +'<button class="x" data-gx="'+i+'" aria-label="Remove group">&times;</button></div>'
-    +'<div class="chips">'+g.members.map(m=>{const c=chan(m);return '<span class="chip in" data-gm="'+i+'" data-v="'+esc(m)+'">'+esc(c?c.label:srcText(m))+' &times;</span>'}).join('')
-    +free.map(c=>'<span class="chip" data-ga="'+i+'" data-v="'+esc(c.id)+'">+ '+esc(c.label)+'</span>').join('')+'</div></div>').join('');
+    +(g.members.length?'<div class="chips">'+g.members.map(m=>{const c=chan(m);return '<span class="chip in" data-gm="'+i+'" data-v="'+esc(m)+'">'+esc(c?c.label:srcText(m))+' &times;</span>'}).join('')+'</div>':'')
+    +(free.length?'<select class="addch" data-ga="'+i+'" aria-label="Add channel"><option value="">Add channel&hellip;</option>'+chanOptions(free)+'</select>':'')+'</div>').join('');
   // ⛔ As everywhere here: S.book again in the handler, a state from ORC replaces it.
   const G=()=>S.book.groups;
   document.querySelectorAll('[data-gc]').forEach(e=>e.oninput=()=>{G()[e.dataset.gc].colour=e.value;pushGroups()});
   document.querySelectorAll('[data-gn]').forEach(e=>e.oninput=()=>{G()[e.dataset.gn].name=e.value;pushGroups()});
   document.querySelectorAll('[data-gx]').forEach(e=>e.onclick=()=>{G().splice(+e.dataset.gx,1);drawGroups();pushGroups(true)});
   document.querySelectorAll('[data-gm]').forEach(e=>e.onclick=()=>{const g=G()[e.dataset.gm];g.members=g.members.filter(m=>m!==e.dataset.v);drawGroups();pushGroups(true)});
-  document.querySelectorAll('[data-ga]').forEach(e=>e.onclick=()=>{G()[e.dataset.ga].members.push(e.dataset.v);drawGroups();pushGroups(true)});
+  document.querySelectorAll('[data-ga]').forEach(e=>e.onchange=()=>{if(!e.value)return;G()[e.dataset.ga].members.push(e.value);drawGroups();pushGroups(true)});
 }
 function drawSnap(){
   const sel=$('#snapSel'),b=S.book,names=Object.keys(b.snapshots).sort();
@@ -314,12 +320,12 @@ function drawFaders(){
     p.faders=shown.concat(p.faders.filter(f=>!shown.includes(f)));
     drawFaders();changed();
   });
-  const rest=k=>S.channels.filter(c=>c.kind===k&&!p.faders.some(f=>f.src===c.id)&&!memberOfListed(p,c.id));
-  const row=(l,k)=>rest(k).length?'<div class="chips"><span class="lbl chl">'+l+'</span>'+rest(k).map(c=>'<span class="chip" data-q="'+c.id+'">+ '+esc(c.label)+'</span>').join('')+'</div>':'';
+  const rest=S.channels.filter(c=>!p.faders.some(f=>f.src===c.id)&&!memberOfListed(p,c.id));
   const restG=S.book.groups.filter(g=>!p.faders.some(f=>f.src==='group:'+g.id));
-  $('#quick').innerHTML=(restG.length?'<div class="chips"><span class="lbl chl">Groups</span>'+restG.map(g=>'<span class="chip" data-q="group:'+esc(g.id)+'">+ '+esc(g.name||'Group')+'</span>').join('')+'</div>':'')
-    +row('Inputs','in')+row('Playbacks','pb');
-  document.querySelectorAll('[data-q]').forEach(e=>e.onclick=()=>{const p=P();if(!p)return;p.faders.push({src:e.dataset.q,name:'',colour:''});drawFaders();changed()});
+  $('#quick').innerHTML=(rest.length||restG.length)?'<select class="addch" id="addFader" aria-label="Add fader"><option value="">Add fader&hellip;</option>'
+    +(restG.length?'<optgroup label="Groups">'+restG.map(g=>'<option value="group:'+esc(g.id)+'">'+esc(g.name||'Group')+'</option>').join('')+'</optgroup>':'')
+    +chanOptions(rest)+'</select>':'';
+  if($('#addFader'))$('#addFader').onchange=e=>{if(!e.target.value)return;const p=P();if(!p)return;p.faders.push({src:e.target.value,name:'',colour:''});drawFaders();changed()};
 }
 // ⇨ SORT BY THE GRIP, mouse or finger. The row under the finger stays where it is
 // in the page and its neighbours move past it: taking it out of the page would
