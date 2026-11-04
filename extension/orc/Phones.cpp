@@ -522,15 +522,20 @@ std::vector<Mixer::Src> Mixer::sourcesOf_(const std::string& mix) const
             }
             std::string kind; int n = 0;
             if (!splitSrc(f.src, kind, n) || !visible(kind, n)) continue;
-            if (const Group* g = groupOfSrc_(f.src); g && listed(*g)) wholeGroup(*g);
-            else if (!once(f.src)) continue;
-            else { Src x = look(kind, n); x.group.clear(); out.push_back(std::move(x)); }
+            // A member of a listed group waits in the file: the group's own row says
+            // where it goes, this one comes back when the group leaves the list.
+            if (const Group* g = groupOfSrc_(f.src); g && listed(*g)) continue;
+            if (!once(f.src)) continue;
+            Src x = look(kind, n);
+            x.group.clear();
+            out.push_back(std::move(x));
+        }
+        for (const Fader& f : p->faders)
             for (Src& x : out) {
                 if (x.id != f.src) continue;
                 if (!f.name.empty())   x.label  = f.name;
                 if (!f.colour.empty()) x.colour = f.colour;
             }
-        }
         return out;
     }
     for (const int n : visIn_) out.push_back(look("in", n));

@@ -767,15 +767,18 @@ int main()
         EXPECT(has(snap, R"("id":"in:1")") && !has(snap, R"("id":"in:2")") && !has(snap, R"("id":"pb:0")"));
         EXPECT(has(snap, R"("label":"My Kick")"));
         EXPECT(has(snap, R"("groups":[])") && !has(snap, R"("group":"drums1")"));
-        // On the list, with a member listed as well: the whole group, once.
+        // On the list, with a member listed as well: the whole group, once, and where
+        // the group's own row is, not where the member's is.
         ph::Performer q = p;
+        q.faders.push_back(ph::Fader{ "pb:0", "", "" });
         q.faders.push_back(ph::Fader{ "group:drums1", "", "" });
         pm.setPerformers({ q });
         pm.takeOut();
         pm.message(c, R"({"t":"select","mix":"perf:perfone1"})", 0);
         out = pm.takeOut();
         snap = to(out, c);
-        EXPECT(has(snap, R"("id":"in:1")") && has(snap, R"("id":"in:2")") && !has(snap, R"("id":"pb:0")"));
+        EXPECT(has(snap, R"("id":"in:1")") && has(snap, R"("id":"in:2")"));
+        EXPECT(snap.find(R"("id":"pb:0")") < snap.find(R"("id":"in:1")"));
         EXPECT(has(snap, R"("label":"My Kick")") && has(snap, R"("groups":[{"group":"drums1")"));
         // Off the list again, and the phone is told at once.
         pm.takeOut();

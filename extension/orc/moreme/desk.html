@@ -170,6 +170,9 @@ const chan=id=>S.channels.find(c=>c.id===id);
 // A performer without a colour: what the phones show, Phones.cpp kPalette by position.
 const PALETTE=['#0099FF','#3fcf6a','#f0c000','#a000a0','#ff6b35','#00c2c2','#e0457b','#7a5cff'];
 const perfColour=p=>p.colour||PALETTE[Math.max(0,S.book.performers.indexOf(p))%8];
+// ⇨ A CHANNEL OF A GROUP ON THE LIST has no row of its own: the group's row is its
+// fader. It stays in the list, and is back when the group leaves.
+const memberOfListed=(p,src)=>S.book.groups.some(g=>g.members.includes(src)&&p.faders.some(f=>f.src==='group:'+g.id));
 const srcText=id=>{const[k,n]=id.split(':');return k==='group'?'Group':(k==='in'?'In ':'PB ')+n};
 const groupOfSrc=id=>id.startsWith('group:')?S.book.groups.find(g=>'group:'+g.id===id):null;
 
@@ -248,7 +251,7 @@ function drawList(){
   const lv=['Off','Simple','Adv'];
   $('#list').innerHTML=S.book.performers.map(p=>{
     const o=S.outputs.find(x=>x.spec===p.output);
-    const count=p.useLayout?'TotalMix':p.faders.length+' faders';
+    const count=p.useLayout?'TotalMix':p.faders.filter(f=>!memberOfListed(p,f.src)).length+' faders';
     return '<div class="pf '+(p.id===curId?'on':'')+'" data-i="'+p.id+'"><span class="sw" style="background:'+esc(perfColour(p))+'"></span><div><b>'+esc(p.name||'Unnamed')+'</b><small>'
       +esc((p.role?p.role+' · ':'')+(o?o.label:'No output'))+'</small><span class="st8"><span class="pill">'+count+'</span><span class="pill '+(p.chanEq?'op':'')+'">EQ '+lv[p.chanEq]+'</span><span class="pill '+(p.chanDyn?'op':'')+'">DYN '+lv[p.chanDyn]+'</span></span></div></div>';
   }).join('')||'<div class="empty">Without performers, the phones pick Phones 1-4.</div>';
@@ -292,6 +295,7 @@ function drawFaders(){
     return list.map(c=>'<option value="'+c.id+'" '+(c.id===x.src?'selected':'')+'>'+esc(c.label)+' ('+srcText(c.id)+')</option>').join('');
   };
   $('#faders').innerHTML=p.faders.map((x,i)=>{
+    if(memberOfListed(p,x.src))return '';
     const c=chan(x.src);
     return '<div class="fr" data-row="'+i+'"><span class="grip" aria-label="Drag to sort">&#8801;</span>'
       +(groupOfSrc(x.src)?'<span></span>':'<input type="color" value="'+esc(x.colour||(c&&c.color)||'#888888')+'" data-c="'+i+'" aria-label="Colour">')
@@ -306,10 +310,11 @@ function drawFaders(){
   dragSort($('#faders'),order=>{
     sorting=false;
     const p=P();if(!p)return;
-    p.faders=order.map(i=>p.faders[+i]);
+    const shown=order.map(i=>p.faders[+i]);
+    p.faders=shown.concat(p.faders.filter(f=>!shown.includes(f)));
     drawFaders();changed();
   });
-  const rest=k=>S.channels.filter(c=>c.kind===k&&!p.faders.some(f=>f.src===c.id));
+  const rest=k=>S.channels.filter(c=>c.kind===k&&!p.faders.some(f=>f.src===c.id)&&!memberOfListed(p,c.id));
   const row=(l,k)=>rest(k).length?'<div class="chips"><span class="lbl chl">'+l+'</span>'+rest(k).map(c=>'<span class="chip" data-q="'+c.id+'">+ '+esc(c.label)+'</span>').join('')+'</div>':'';
   const restG=S.book.groups.filter(g=>!p.faders.some(f=>f.src==='group:'+g.id));
   $('#quick').innerHTML=(restG.length?'<div class="chips"><span class="lbl chl">Groups</span>'+restG.map(g=>'<span class="chip" data-q="group:'+esc(g.id)+'">+ '+esc(g.name||'Group')+'</span>').join('')+'</div>':'')
