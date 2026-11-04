@@ -59,6 +59,11 @@
 #include "SettingsServer.h"
 #include "Surface.h"
 
+#if defined(_WIN32)
+#  include <windows.h>
+#  include <timeapi.h>
+#endif
+
 namespace rme = reasixty::rme;
 
 namespace {
@@ -127,6 +132,24 @@ int main()
         std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
         std::printf("\n=== ORC start %s ===\n", when);
     }
+
+#if defined(_WIN32)
+    // ⛔ A 2 MS SLEEP TAKES 15.5 MS HERE, 2.4 MS WITH THIS (StoerPC, 04.11.2026). The
+    // devices start with about a thousand frames, each followed by 2 ms: the UF8
+    // took some 15 s to come up. The UF1's pacer and the 33 ms loops wait the same
+    // way. Windows 11 may drop the request for a process without a visible window,
+    // and all ORC has is a tray icon, so it asks to have it honoured (Microsoft,
+    // SetProcessInformation). Earlier systems refuse that, which changes nothing.
+    {
+        PROCESS_POWER_THROTTLING_STATE honour{};
+        honour.Version     = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+        honour.ControlMask = PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+        honour.StateMask   = 0;
+        ::SetProcessInformation(::GetCurrentProcess(), ProcessPowerThrottling, &honour, sizeof(honour));
+    }
+    ::timeBeginPeriod(1);
+    struct TimerEnd { ~TimerEnd() { ::timeEndPeriod(1); } } timerEnd;
+#endif
 
     // ⇨ ORC'S BINDINGS HOST. The engine is the extension's, unchanged and
     // unforked; what differs is the four answers. Two of them ORC does not have:

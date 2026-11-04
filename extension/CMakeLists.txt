@@ -1530,7 +1530,7 @@ if(WIN32 AND ORC_WINDOWS)
         orc_windows_settings(${t})
         target_include_directories(${t} PRIVATE src orc vendor/WDL "${WDL_DIR}")
         target_link_libraries(${t} PRIVATE reasixty_libusb Threads::Threads
-            winhttp setupapi iphlpapi bcrypt)
+            winhttp setupapi iphlpapi bcrypt winmm)
         add_custom_command(TARGET ${t} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ORC_WIN_LIBUSB_DLL}"
                 "$<TARGET_FILE_DIR:${t}>/libusb-1.0.dll")
