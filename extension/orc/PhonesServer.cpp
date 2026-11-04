@@ -387,6 +387,7 @@ void Server::loop()
     std::map<sock_t, Conn> conns;       // by fd
     std::map<int, sock_t> fdOfMix;      // mixer id -> fd
     bool                tmSeen = false;
+    std::size_t         shownIn = 0, shownPb = 0;   // for the log, when they change
 
     auto closeListen = [&] {
         if (listenFd != kNone) { orc::sock::closeSock(listenFd); listenFd = kNone; }
@@ -619,7 +620,13 @@ void Server::loop()
             lastSync = t;
             const rme::State st = link_.snapshot();
             tmSeen = st.ingested > 0;
-            mixer.sync(st, link_.visible(), tmSeen);
+            const rme::Manager::Visible vis = link_.visible();
+            if (vis.round != 0 && (vis.in.size() != shownIn || vis.pb.size() != shownPb)) {
+                shownIn = vis.in.size();
+                shownPb = vis.pb.size();
+                orc::logLine("MoreMe: TotalMix shows %zu inputs, %zu playbacks\n", shownIn, shownPb);
+            }
+            mixer.sync(st, vis, tmSeen);
             // The meters ten times a second: TotalMix sends ~24 a second, and
             // the phone draws the fall in between.
             if (++meterTick % 2 == 0) mixer.meters();

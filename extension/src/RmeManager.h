@@ -202,9 +202,9 @@ class Manager {
     // sends nothing for a channel hidden on this remote, so the only way to
     // learn that a channel WAS hidden is to ask again and see who is missing.
     // With rounds on, the link asks /sendall every `everyMs` and counts the
-    // inputs and playbacks that report a submix node in the 400 ms after each
-    // ask: that set is visible() until the next round. stoerme's bridge does
-    // the same (every 3 s, 400 ms). The same rounds tell a strip that left the
+    // inputs and playbacks that report a submix node until TotalMix has finished
+    // answering: that set is visible() until the next round, and no new round
+    // starts before. The same rounds tell a strip that left the
     // layout (applyNameRound), which the surfaces' remote needs too: ORC and
     // Rea-Sixty switch them on for it as well. Off by default.
     // ⛔ A round repeats every value, one of which can be older than a fader move
