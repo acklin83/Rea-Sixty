@@ -69,6 +69,11 @@ input[type=color]{width:24px;height:24px;padding:0;border:none;background:none;b
 .fr .x{background:none;border:none;color:var(--fg3);cursor:pointer;font-size:16px}
 .fr .x:hover{color:var(--fg)}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.grpb{padding:10px 0;border-bottom:1px solid #202020}
+.grh{display:grid;grid-template-columns:24px minmax(0,1fr) 26px;gap:8px;align-items:center}
+.grh .x{background:none;border:none;color:var(--fg3);cursor:pointer;font-size:16px}
+.grh .x:hover{color:var(--fg)}
+.chip.in{border-style:solid;border-color:var(--accent);color:var(--fg)}
 .chl{width:64px;align-self:center}
 .chip{background:var(--bg3);border:1px dashed #3a3a3a;border-radius:16px;padding:4px 11px;cursor:pointer;font-size:12px;color:var(--fg2)}
 .chip:hover{color:var(--fg);border-color:#666}
@@ -107,6 +112,9 @@ input[type=color]{width:24px;height:24px;padding:0;border:none;background:none;b
     <h2>Performers</h2>
     <div id="list"></div>
     <button class="b add" id="add">Add performer</button>
+    <h2 style="margin-top:22px">Groups</h2>
+    <div id="groups"></div>
+    <button class="b add" id="addGroup">Add group</button>
   </div>
   <div class="col" id="edit">
     <h2>Performer</h2>
@@ -159,7 +167,8 @@ let ws=null,S=null,curId=null,land=false,shownFrame=null,pendingDraw=false;
 let addWait=null,sorting=false;
 const P=()=>S&&S.book.performers.find(p=>p.id===curId)||null;
 const chan=id=>S.channels.find(c=>c.id===id);
-const srcText=id=>{const[k,n]=id.split(':');return(k==='in'?'In ':'PB ')+n};
+const srcText=id=>{const[k,n]=id.split(':');return k==='group'?'Group':(k==='in'?'In ':'PB ')+n};
+const groupOfSrc=id=>id.startsWith('group:')?S.book.groups.find(g=>'group:'+g.id===id):null;
 
 // ---- the link to ORC ----
 // ⛔ wdl_json_parser reads \\ as a quote (jsonparse.h), and it reads \u005c right.
@@ -198,7 +207,33 @@ function changed(){drawList();push(true)}
 
 // ---- drawing ----
 function drawSoft(){drawSnap();drawList()}
-function draw(){drawSnap();drawList();drawEdit();drawRight()}
+function draw(){drawSnap();drawList();drawGroups();drawEdit();drawRight()}
+// ⇨ THE GROUPS BELONG TO THE SNAPSHOT, for all performers and for Phones 1-4 alike.
+// A channel is in one group; the chips offer the ones still free.
+let pushG=null;
+function pushGroups(now){
+  clearTimeout(pushG);
+  const go=()=>send({t:'groups',groups:S.book.groups});
+  if(now)go();else pushG=setTimeout(go,250);
+}
+function drawGroups(){
+  const gs=S.book.groups;
+  const taken=new Set(gs.flatMap(g=>g.members));
+  const free=S.channels.filter(c=>!taken.has(c.id));
+  $('#groups').innerHTML=gs.map((g,i)=>'<div class="grpb">'
+    +'<div class="grh"><input type="color" value="'+esc(g.colour||'#0099ff')+'" data-gc="'+i+'" aria-label="Colour">'
+    +'<input type="text" maxlength="64" value="'+esc(g.name)+'" placeholder="Group name" data-gn="'+i+'" aria-label="Name">'
+    +'<button class="x" data-gx="'+i+'" aria-label="Remove group">&times;</button></div>'
+    +'<div class="chips">'+g.members.map(m=>{const c=chan(m);return '<span class="chip in" data-gm="'+i+'" data-v="'+esc(m)+'">'+esc(c?c.label:srcText(m))+' &times;</span>'}).join('')
+    +free.map(c=>'<span class="chip" data-ga="'+i+'" data-v="'+esc(c.id)+'">+ '+esc(c.label)+'</span>').join('')+'</div></div>').join('');
+  // ⛔ As everywhere here: S.book again in the handler, a state from ORC replaces it.
+  const G=()=>S.book.groups;
+  document.querySelectorAll('[data-gc]').forEach(e=>e.oninput=()=>{G()[e.dataset.gc].colour=e.value;pushGroups()});
+  document.querySelectorAll('[data-gn]').forEach(e=>e.oninput=()=>{G()[e.dataset.gn].name=e.value;pushGroups()});
+  document.querySelectorAll('[data-gx]').forEach(e=>e.onclick=()=>{G().splice(+e.dataset.gx,1);drawGroups();pushGroups(true)});
+  document.querySelectorAll('[data-gm]').forEach(e=>e.onclick=()=>{const g=G()[e.dataset.gm];g.members=g.members.filter(m=>m!==e.dataset.v);drawGroups();pushGroups(true)});
+  document.querySelectorAll('[data-ga]').forEach(e=>e.onclick=()=>{G()[e.dataset.ga].members.push(e.dataset.v);drawGroups();pushGroups(true)});
+}
 function drawSnap(){
   const sel=$('#snapSel'),b=S.book,names=Object.keys(b.snapshots).sort();
   sel.innerHTML='<option value="">'+(b.current?'':'Not saved')+'</option>'+names.map(n=>'<option '+(n===b.current?'selected':'')+' value="'+esc(n)+'">'+esc(n)+'</option>').join('');
@@ -247,6 +282,8 @@ function drawFaders(){
     return;
   }
   const options=x=>{
+    const gr=groupOfSrc(x.src);
+    if(gr)return '<option selected value="'+esc(x.src)+'">'+esc(gr.name||'Group')+'</option>';
     const list=S.channels.slice();
     if(!chan(x.src))list.push({id:x.src,label:srcText(x.src)+' (not visible)'});
     return list.map(c=>'<option value="'+c.id+'" '+(c.id===x.src?'selected':'')+'>'+esc(c.label)+' ('+srcText(c.id)+')</option>').join('');
@@ -254,8 +291,8 @@ function drawFaders(){
   $('#faders').innerHTML=p.faders.map((x,i)=>{
     const c=chan(x.src);
     return '<div class="fr" data-row="'+i+'"><span class="grip" aria-label="Drag to sort">&#8801;</span>'
-      +'<input type="color" value="'+esc(x.colour||(c&&c.color)||'#888888')+'" data-c="'+i+'" aria-label="Colour">'
-      +'<input type="text" maxlength="64" value="'+esc(x.name)+'" placeholder="'+esc(c?c.label:srcText(x.src))+'" data-n="'+i+'" aria-label="Name">'
+      +(groupOfSrc(x.src)?'<span></span>':'<input type="color" value="'+esc(x.colour||(c&&c.color)||'#888888')+'" data-c="'+i+'" aria-label="Colour">')
+      +(groupOfSrc(x.src)?'<span class="note">Whole group</span>':'<input type="text" maxlength="64" value="'+esc(x.name)+'" placeholder="'+esc(c?c.label:srcText(x.src))+'" data-n="'+i+'" aria-label="Name">')
       +'<select data-s="'+i+'" aria-label="Source">'+options(x)+'</select>'
       +'<button class="x" data-x="'+i+'" aria-label="Remove">&times;</button></div>';
   }).join('')||'<div class="empty">No faders yet.</div>';
@@ -271,7 +308,9 @@ function drawFaders(){
   });
   const rest=k=>S.channels.filter(c=>c.kind===k&&!p.faders.some(f=>f.src===c.id));
   const row=(l,k)=>rest(k).length?'<div class="chips"><span class="lbl chl">'+l+'</span>'+rest(k).map(c=>'<span class="chip" data-q="'+c.id+'">+ '+esc(c.label)+'</span>').join('')+'</div>':'';
-  $('#quick').innerHTML=row('Inputs','in')+row('Playbacks','pb');
+  const restG=S.book.groups.filter(g=>!p.faders.some(f=>f.src==='group:'+g.id));
+  $('#quick').innerHTML=(restG.length?'<div class="chips"><span class="lbl chl">Groups</span>'+restG.map(g=>'<span class="chip" data-q="group:'+esc(g.id)+'">+ '+esc(g.name||'Group')+'</span>').join('')+'</div>':'')
+    +row('Inputs','in')+row('Playbacks','pb');
   document.querySelectorAll('[data-q]').forEach(e=>e.onclick=()=>{const p=P();if(!p)return;p.faders.push({src:e.dataset.q,name:'',colour:''});drawFaders();changed()});
 }
 // ⇨ SORT BY THE GRIP, mouse or finger. The row under the finger stays where it is
@@ -351,6 +390,11 @@ function ask(text,withInput,value){
 
 // ---- controls ----
 $('#add').onclick=()=>{const before=S.book.performers.map(p=>p.id);addWait=before;send({t:'add'})};
+$('#addGroup').onclick=()=>{
+  const k='abcdefghijklmnopqrstuvwxyz0123456789';
+  let id='';for(let i=0;i<8;i++)id+=k[Math.floor(Math.random()*k.length)];
+  S.book.groups.push({id,name:'',colour:'#0099ff',members:[]});drawGroups();pushGroups(true);
+};
 $('#remove').onclick=()=>{const p=P();if(p)ask('Delete '+(p.name||'this performer')+'? The link stops working.').then(ok=>{if(ok)send({t:'remove',id:p.id})})};
 $('#name').oninput=e=>{P().name=e.target.value;drawList();push()};
 $('#role').oninput=e=>{P().role=e.target.value;drawList();push()};

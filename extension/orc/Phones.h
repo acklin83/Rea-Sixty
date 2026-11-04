@@ -116,6 +116,8 @@ class Mixer {
     // "perf:<link>". While there is one, the Phones 1-4 list is gone: everybody
     // is somebody. A change is on the phones at once.
     void setPerformers(const std::vector<Performer>& v);
+    // The channel groups of the snapshot in use, for every mix alike.
+    void setGroups(const std::vector<Group>& v);
     // The visible channels, for Studio Control's list.
     std::string channelsJson() const { return sourcesJson_(std::string()); }
 
@@ -168,6 +170,7 @@ class Mixer {
         std::string cfgJson;    // the last config this client was sent
         bool        meters = true;               // switched off on the phone
         std::map<std::string, int> lvSent;       // half-dB steps last sent, by "m"/"in:3"
+        std::map<std::string, std::string> groupSent;   // the group message last sent, by group
     };
     // ⇨ MUTE THAT TOTALMIX DOES NOT HAVE. Global OSC has no mute per routing,
     // so the fader rides to -inf and the level the phones SHOW stays the one it
@@ -179,11 +182,25 @@ class Mixer {
 
     void        tryPin_(Client& c, const std::string& given, long long nowMs, int id);
     std::string configJson_(int forId) const;
-    std::string snapshotJson_(const std::string& mix) const;
+    std::string snapshotJson_(const std::string& mix);
     struct Src {
         std::string id, kind, label, colour;
+        std::string group;   // the group it moves with, "" = none
         int         n = 0;
     };
+    // ⇨ WHAT A GROUP KEEPS: each member's distance to the group's level, by bus. A
+    // member the group took below the fader's floor comes back on the way up.
+    using GroupMemo = std::map<std::string, double>;   // src -> dB below the loudest
+    const Group* groupOfSrc_(const std::string& src) const;
+    std::vector<Src> groupMembers_(const std::string& mix, const std::string& group) const;
+    double      groupDb_(int bus, const Group& g, const std::vector<Src>& members);
+    std::string groupFieldsJson_(int bus, const Group& g, const std::vector<Src>& members);
+    std::string groupsJson_(const std::string& mix);
+    void        groupMove_(const std::string& mix, int bus, const Group& g, double db);
+    void        pushGroups_();
+    void        setMemberDb_(int bus, const Src& x, double db);
+    void        setMute_(int bus, const std::string& src, bool muted);
+    void        setSolo_(int bus, const std::string& src, bool solo);
     std::vector<Src> sourcesOf_(const std::string& mix) const;
     std::string sourcesJson_(const std::string& mix) const;
     void        pushConfig_();
@@ -208,6 +225,8 @@ class Mixer {
     PinChecker                         pin_;
     std::string                        version_ = "1";
     std::vector<Performer>             perf_;
+    std::vector<Group>                 groups_;
+    std::map<std::string, GroupMemo>   groupMemo_;   // "bus:group"
     std::map<int, Client>              clients_;   // by id = by arrival, as stoerme's Set
     int                                nextId_ = 1;
     std::map<std::string, FailRecord>  fails_;

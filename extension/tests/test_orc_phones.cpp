@@ -640,6 +640,144 @@ int main()
         EXPECT(has(to(out, f), "phone1"));
     }
 
+    // ── channel groups (Frank 04.11.2026) ──
+    {
+        namespace ph = orc::phones;
+        auto token = [] { return std::string("abcd1234"); };
+        // In the book and in the snapshot, not on a performer; one group per channel.
+        ph::Book b;
+        EXPECT(ph::applyDesk(b, R"({"t":"groups","groups":[{"id":"drums1","name":"Drums","colour":"#ff0000","members":["in:1","in:2","nonsense"]},{"id":"rest12","name":"Rest","members":["in:2","pb:0"]},{"id":"BAD","members":["in:5"]}]})", token));
+        EXPECT(b.groups.size() == 2 && b.groups[0].members.size() == 2 && b.groups[1].members.size() == 1 && b.groups[1].members[0] == "pb:0");
+        EXPECT(ph::applyDesk(b, R"({"t":"add"})", token));
+        EXPECT(ph::applyDesk(b, R"({"t":"update","id":"abcd1234","performer":{"output":"phones1","useLayout":false,"faders":[{"src":"group:drums1"},{"src":"group:rest12"}]}})", token));
+        EXPECT(b.performers[0].faders.size() == 2);
+        EXPECT(ph::applyDesk(b, R"({"t":"snapSave","name":"Band"})", token));
+        EXPECT(ph::applyDesk(b, R"({"t":"groups","groups":[{"id":"drums1","name":"Drums","members":["in:1"]}]})", token));
+        EXPECT(b.performers[0].faders.size() == 1);   // the fader of a group that is gone
+        ph::Book back;
+        EXPECT(ph::parseBook(ph::bookJson(b), back));
+        EXPECT(back.groups.size() == 1 && back.snapshots["Band"].groups.size() == 2 && back.snapshots["Band"].performers.size() == 1);
+        EXPECT(ph::applyDesk(b, R"({"t":"snapLoad","name":"Band"})", token) && b.groups.size() == 2 && b.performers[0].faders.size() == 2);
+        EXPECT(ph::applyDesk(b, R"({"t":"snapNew"})", token) && b.groups.empty());
+        // A file from ORC 1.6.1: a snapshot was its list of performers.
+        ph::Book old;
+        EXPECT(ph::parseBook(R"({"version":1,"current":"Old","performers":[],"snapshots":{"Old":[{"id":"oldperf1","name":"Ann"}]}})", old));
+        EXPECT(old.snapshots["Old"].performers.size() == 1 && old.snapshots["Old"].groups.empty() && old.current == "Old");
+
+        // The mixer. in:1 -6, in:2 0, pb:0 -20 on bus 8.
+        Mixer mx;
+        rme::State st = rig();
+        mx.setGroups({ ph::Group{ "drums1", "Drums", "#ff0000", { "in:1", "in:2" } } });
+        mx.sync(st, vis(1, { 1, 2 }, { 0 }), true);
+        const int a = mx.open("a");
+        mx.message(a, R"({"t":"hello"})", 0);
+        mx.message(a, R"({"t":"select","mix":"phone1"})", 0);
+        auto out = mx.takeOut();
+        std::string snap = to(out, a);
+        EXPECT(has(snap, R"("group":"drums1")") && has(snap, R"("label":"Drums")"));
+        EXPECT(has(snap, R"("groups":[{"group":"drums1","db":0,)"));   // the loudest member
+        mx.takeOsc();
+        auto move = [&](double db) {
+            mx.message(a, R"({"t":"groupSet","mix":"phone1","group":"drums1","val":)" + std::to_string(db) + "}", 0);
+            const auto osc = mx.takeOsc();
+            sendAll(st, osc);
+            return osc;
+        };
+        auto level = [&](int ch) { const double* v = st.mixFader(rme::Bus::Input, ch, 8); return v ? *v : 999.0; };
+        auto near = [](double a, double b) { return a > b - 0.01 && a < b + 0.01; };
+        // Everyone by the same dB.
+        EXPECT(move(-3.0).size() == 2);
+        EXPECT(near(level(1), -9.0) && near(level(2), -3.0));
+        EXPECT(near(*st.mixFader(rme::Bus::Playback, 0, 8), -20.0));   // not a member
+        // The loudest stops the group at its ceiling.
+        move(20.0);
+        EXPECT(near(level(2), 6.0) && near(level(1), 0.0));
+        // Down to the floor and back: the balance is still there.
+        move(-300.0);
+        EXPECT(level(1) <= -300.0 && level(2) <= -300.0);
+        move(0.0);
+        EXPECT(near(level(2), 0.0) && near(level(1), -6.0));
+        // One member takes the floor first, and comes back.
+        move(-60.0);
+        EXPECT(level(1) <= -300.0 && near(level(2), -60.0));
+        move(-3.0);
+        EXPECT(near(level(1), -9.0) && near(level(2), -3.0));
+        // A member's own fader changes its distance for the moves to come.
+        mx.message(a, R"({"t":"set","mix":"phone1","src":"in:1","ctrl":"fader","val":-13})", 0);
+        sendAll(st, mx.takeOsc());
+        move(-1.0);
+        EXPECT(near(level(1), -11.0) && near(level(2), -1.0));
+        // Pulled down on its own: it stays down when the group moves.
+        mx.message(a, R"({"t":"set","mix":"phone1","src":"in:1","ctrl":"fader","val":-300})", 0);
+        sendAll(st, mx.takeOsc());
+        move(-4.0);
+        EXPECT(level(1) <= -300.0 && near(level(2), -4.0));
+        mx.message(a, R"({"t":"set","mix":"phone1","src":"in:1","ctrl":"fader","val":-10})", 0);
+        sendAll(st, mx.takeOsc());
+        // Mute: all of them, a level moves on behind a mute, unmute brings it.
+        mx.message(a, R"({"t":"groupMute","mix":"phone1","group":"drums1"})", 0);
+        sendAll(st, mx.takeOsc());
+        EXPECT(level(1) <= -300.0 && level(2) <= -300.0);
+        out = mx.takeOut();
+        EXPECT(has(to(out, a), R"("group":"drums1","db":-4,"mute":1)"));
+        EXPECT(move(-6.0).empty());
+        mx.message(a, R"({"t":"groupMute","mix":"phone1","group":"drums1"})", 0);
+        sendAll(st, mx.takeOsc());
+        EXPECT(near(level(2), -6.0) && near(level(1), -12.0));
+        // Solo: all, and again all off.
+        mx.message(a, R"({"t":"groupSolo","mix":"phone1","group":"drums1"})", 0);
+        sendAll(st, mx.takeOsc());
+        EXPECT(st.mixSoloed(rme::Bus::Input, 1, 8) && st.mixSoloed(rme::Bus::Input, 2, 8));
+        mx.message(a, R"({"t":"groupSolo","mix":"phone1","group":"drums1"})", 0);
+        sendAll(st, mx.takeOsc());
+        EXPECT(!st.mixSoloed(rme::Bus::Input, 1, 8) && !st.mixSoloed(rme::Bus::Input, 2, 8));
+        // Moved in TotalMix: the group's level follows, and nothing is sent back.
+        feed(st, "/mix/in/2/8/fader", 2.0f);
+        mx.takeOut();
+        mx.sync(st, vis(1, { 1, 2 }, { 0 }), true);
+        out = mx.takeOut();
+        EXPECT(has(to(out, a), R"("group":"drums1","db":2,)"));
+        EXPECT(mx.takeOsc().empty());
+        // A hidden member is left out, and the group goes with its last member.
+        mx.sync(st, vis(2, { 2 }, { 0 }), true);
+        mx.message(a, R"({"t":"select","mix":"phone1"})", 0);
+        out = mx.takeOut();
+        snap = to(out, a);
+        EXPECT(!has(snap, R"("id":"in:1")") && has(snap, R"("id":"in:2")"));
+        // An unknown group, or a group on a mix nobody is on, does nothing.
+        mx.takeOsc();
+        mx.message(a, R"({"t":"groupSet","mix":"phone1","group":"nobody1","val":0})", 0);
+        EXPECT(mx.takeOsc().empty());
+
+        // ⛔ A performer with one member gets the whole group: the rest is in the
+        // headphones whether a fader shows it or not.
+        Mixer pm;
+        rme::State ps = rig();
+        pm.sync(ps, vis(1, { 1, 2 }, { 0 }), true);
+        ph::Performer p;
+        p.id = "perfone1"; p.name = "Sam"; p.output = "phones1"; p.useLayout = false;
+        p.faders.push_back(ph::Fader{ "in:1", "My Kick", "" });
+        pm.setPerformers({ p });
+        pm.setGroups({ ph::Group{ "drums1", "Drums", "", { "in:1", "in:2" } } });
+        const int c = pm.open("c");
+        pm.message(c, R"({"t":"hello","performer":"perfone1"})", 0);
+        pm.message(c, R"({"t":"select","mix":"perf:perfone1"})", 0);
+        out = pm.takeOut();
+        snap = to(out, c);
+        EXPECT(has(snap, R"("id":"in:1")") && has(snap, R"("id":"in:2")") && !has(snap, R"("id":"pb:0")"));
+        EXPECT(has(snap, R"("label":"My Kick")"));
+        EXPECT(has(snap, R"("groups":[{"group":"drums1")"));
+        // And the group's own entry brings it too, on its own.
+        ph::Performer q = p;
+        q.faders = { ph::Fader{ "group:drums1", "", "" } };
+        pm.setPerformers({ q });
+        pm.takeOut();
+        pm.message(c, R"({"t":"select","mix":"perf:perfone1"})", 0);
+        out = pm.takeOut();
+        snap = to(out, c);
+        EXPECT(has(snap, R"("id":"in:1")") && has(snap, R"("id":"in:2")"));
+    }
+
     if (g_fail) { std::printf("test_orc_phones: %d failure(s)\n", g_fail); return 1; }
     std::printf("test_orc_phones: ok\n");
     return 0;

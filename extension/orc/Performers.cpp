@@ -18,6 +18,7 @@ constexpr std::size_t kMaxText       = 64;
 constexpr std::size_t kMaxPerformers = 64;
 constexpr std::size_t kMaxFaders     = 128;
 constexpr std::size_t kMaxSnapshots  = 64;
+constexpr std::size_t kMaxGroups     = 32;
 
 std::string jstr(const std::string& s)
 {
@@ -63,6 +64,20 @@ std::string performersJson(const std::vector<Performer>& v)
     return o + "]";
 }
 
+std::string groupsJson(const std::vector<Group>& v)
+{
+    std::string o = "[";
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        const Group& g = v[i];
+        if (i) o += ",";
+        o += "{\"id\":" + jstr(g.id) + ",\"name\":" + jstr(g.name) + ",\"colour\":" + jstr(g.colour) + ",\"members\":[";
+        for (std::size_t m = 0; m < g.members.size(); ++m)
+            o += (m ? "," : "") + jstr(g.members[m]);
+        o += "]}";
+    }
+    return o + "]";
+}
+
 std::string text(const wdl_json_element* e, const char* k)
 {
     const char* v = e->get_string_by_name(k);
@@ -103,6 +118,11 @@ bool validSrc(const std::string& s)
                        [](char ch) { return ch >= '0' && ch <= '9'; });
 }
 
+bool isGroupSrc(const std::string& s)
+{
+    return s.rfind("group:", 0) == 0 && validToken(s.substr(6));
+}
+
 bool validOutput(const std::string& s)
 {
     if (s.empty() || s == "main" || s == "mainB") return true;
@@ -136,7 +156,7 @@ void readFields(const wdl_json_element* e, Performer& p)
             if (!x->is_object()) continue;
             Fader f;
             f.src = text(x, "src");
-            if (!validSrc(f.src)) continue;
+            if (!validSrc(f.src) && !isGroupSrc(f.src)) continue;
             // One channel once: two faders on one mix point would fight.
             if (std::any_of(p.faders.begin(), p.faders.end(),
                             [&](const Fader& o) { return o.src == f.src; })) continue;
@@ -166,6 +186,51 @@ std::vector<Performer> readPerformers(const wdl_json_element* arr)
     return out;
 }
 
+std::vector<Group> readGroups(const wdl_json_element* arr)
+{
+    std::vector<Group> out;
+    if (!arr || !arr->is_array()) return out;
+    for (int i = 0; out.size() < kMaxGroups; ++i) {
+        const wdl_json_element* e = arr->enum_item(i);
+        if (!e) break;
+        if (!e->is_object()) continue;
+        Group g;
+        g.id = text(e, "id");
+        if (!validToken(g.id)) continue;
+        if (std::any_of(out.begin(), out.end(), [&](const Group& o) { return o.id == g.id; })) continue;
+        g.name   = text(e, "name");
+        g.colour = colourOf(text(e, "colour"));
+        if (const wdl_json_element* m = e->get_item_by_name("members"); m && m->is_array()) {
+            for (int k = 0; g.members.size() < kMaxFaders; ++k) {
+                const wdl_json_element* x = m->enum_item(k);
+                if (!x) break;
+                const std::string src = x->m_value ? x->m_value : "";
+                if (!validSrc(src)) continue;
+                if (std::find(g.members.begin(), g.members.end(), src) != g.members.end()) continue;
+                // ⛔ One group per channel: two group faders on one mix point would fight.
+                if (std::any_of(out.begin(), out.end(), [&](const Group& o) {
+                        return std::find(o.members.begin(), o.members.end(), src) != o.members.end();
+                    })) continue;
+                g.members.push_back(src);
+            }
+        }
+        out.push_back(std::move(g));
+    }
+    return out;
+}
+
+// A performer's fader of a group that is gone goes with it.
+void dropGoneGroups(std::vector<Performer>& performers, const std::vector<Group>& groups)
+{
+    for (Performer& p : performers) {
+        p.faders.erase(std::remove_if(p.faders.begin(), p.faders.end(), [&](const Fader& f) {
+            return isGroupSrc(f.src) && std::none_of(groups.begin(), groups.end(), [&](const Group& g) {
+                return f.src == "group:" + g.id;
+            });
+        }), p.faders.end());
+    }
+}
+
 } // namespace
 
 bool validToken(const std::string& t)
@@ -183,11 +248,13 @@ std::string bookJson(const Book& b)
     for (const auto& [name, v] : b.snapshots) {
         if (!first) snaps += ",";
         first = false;
-        snaps += jstr(name) + ":" + performersJson(v);
+        snaps += jstr(name) + ":{\"performers\":" + performersJson(v.performers)
+               + ",\"groups\":" + groupsJson(v.groups) + "}";
     }
     snaps += "}";
     return "{\"version\":1,\"current\":" + jstr(b.current)
          + ",\"performers\":" + performersJson(b.performers)
+         + ",\"groups\":" + groupsJson(b.groups)
          + ",\"snapshots\":" + snaps + "}";
 }
 
@@ -199,6 +266,7 @@ bool parseBook(const std::string& json, Book& out)
     if (!root || !root->is_object()) return false;
     Book b;
     b.performers = readPerformers(root->get_item_by_name("performers"));
+    b.groups     = readGroups(root->get_item_by_name("groups"));
     b.current    = text(root, "current");
     if (const wdl_json_element* s = root->get_item_by_name("snapshots"); s && s->is_object()) {
         for (int i = 0; b.snapshots.size() < kMaxSnapshots; ++i) {
@@ -207,7 +275,10 @@ bool parseBook(const std::string& json, Book& out)
             if (!e || !name) break;
             std::string n = name;
             if (n.empty() || n.size() > kMaxText) continue;
-            b.snapshots[n] = readPerformers(e);
+            // Up to ORC 1.6.1 a snapshot was its list of performers.
+            if (e->is_array()) { b.snapshots[n].performers = readPerformers(e); continue; }
+            b.snapshots[n].performers = readPerformers(e->get_item_by_name("performers"));
+            b.snapshots[n].groups     = readGroups(e->get_item_by_name("groups"));
         }
     }
     if (!b.snapshots.count(b.current)) b.current.clear();
@@ -252,6 +323,11 @@ bool applyDesk(Book& b, const std::string& json, const std::function<std::string
         readFields(e, *it);
         return true;
     }
+    if (t == "groups") {
+        b.groups = readGroups(root->get_item_by_name("groups"));
+        dropGoneGroups(b.performers, b.groups);
+        return true;
+    }
     if (t == "remove") {
         const auto it = find();
         if (it == b.performers.end()) return false;
@@ -261,6 +337,7 @@ bool applyDesk(Book& b, const std::string& json, const std::function<std::string
     const std::string name = text(root, "name");
     if (t == "snapNew") {
         b.performers.clear();
+        b.groups.clear();
         b.current.clear();
         return true;
     }
@@ -268,14 +345,15 @@ bool applyDesk(Book& b, const std::string& json, const std::function<std::string
         // No name: the one in use. A new name is Save as.
         const std::string to = name.empty() ? b.current : name;
         if (to.empty() || (!b.snapshots.count(to) && b.snapshots.size() >= kMaxSnapshots)) return false;
-        b.snapshots[to] = b.performers;
+        b.snapshots[to] = Snapshot{ b.performers, b.groups };
         b.current = to;
         return true;
     }
     if (t == "snapLoad") {
         const auto it = b.snapshots.find(name);
         if (it == b.snapshots.end()) return false;
-        b.performers = it->second;
+        b.performers = it->second.performers;
+        b.groups     = it->second.groups;
         b.current    = name;
         return true;
     }

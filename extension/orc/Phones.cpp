@@ -202,7 +202,7 @@ std::string memoKey(int bus, const std::string& src)
 
 // One field of a parsed message. JSON's value, as JavaScript would read it.
 struct Msg {
-    std::string t, pin, mix, src, ctrl, performer, target, param;
+    std::string t, pin, mix, src, ctrl, performer, target, param, group;
     bool        pinIsString = false;
     bool        force       = false;
     bool        on          = true;   // "meters
@@ -230,6 +230,7 @@ bool parseMsg(const std::string& json, Msg& out)
     text("performer", out.performer);
     text("target", out.target);
     text("param", out.param);
+    text("group", out.group);
     if (const wdl_json_element* f = root->get_item_by_name("force"); f && f->m_value) {
         // JavaScript truthiness of what the page can send (true, or a number).
         const std::string v = f->m_value;
@@ -321,6 +322,29 @@ void Mixer::setPerformers(const std::vector<Performer>& v)
     }
     pushConfig_();
     resnapViewers_();
+}
+
+void Mixer::setGroups(const std::vector<Group>& v)
+{
+    if (v == groups_) return;
+    groups_ = v;
+    for (auto& [id, c] : clients_) c.groupSent.clear();
+    resnapViewers_();
+}
+
+const Group* Mixer::groupOfSrc_(const std::string& src) const
+{
+    for (const Group& g : groups_)
+        if (std::find(g.members.begin(), g.members.end(), src) != g.members.end()) return &g;
+    return nullptr;
+}
+
+std::vector<Mixer::Src> Mixer::groupMembers_(const std::string& mix, const std::string& group) const
+{
+    std::vector<Src> out;
+    for (const Src& x : sourcesOf_(mix))
+        if (x.group == group) out.push_back(x);
+    return out;
 }
 
 int Mixer::holderOf_(const std::string& mixId) const
@@ -461,6 +485,7 @@ std::vector<Mixer::Src> Mixer::sourcesOf_(const std::string& mix) const
             x.colour = colourHex(c->second.colour);
         }
         if (x.label.empty()) x.label = (kind == "in" ? "IN " : "PB ") + std::to_string(n);
+        if (const Group* g = groupOfSrc_(x.id)) x.group = g->id;
         // TotalMix' colour wins; the positional palette fills the rest.
         if (x.colour.empty()) x.colour = kPalette[i % 8];
         ++i;
@@ -468,15 +493,37 @@ std::vector<Mixer::Src> Mixer::sourcesOf_(const std::string& mix) const
     };
     const Performer* p = perfOfMix_(mix);
     if (p && !p->useLayout) {
-        for (const Fader& f : p->faders) {
-            std::string kind; int n = 0;
-            if (!splitSrc(f.src, kind, n)) continue;
+        auto once = [&](const std::string& id) {
+            return std::none_of(out.begin(), out.end(), [&](const Src& s) { return s.id == id; });
+        };
+        auto visible = [&](const std::string& kind, int n) {
             const auto& vis = kind == "in" ? visIn_ : visPb_;
-            if (std::find(vis.begin(), vis.end(), n) == vis.end()) continue;
-            Src x = look(kind, n);
-            if (!f.name.empty())   x.label  = f.name;
-            if (!f.colour.empty()) x.colour = f.colour;
-            out.push_back(std::move(x));
+            return std::find(vis.begin(), vis.end(), n) != vis.end();
+        };
+        // ⛔ A GROUP COMES WHOLE. The list says what shows, the submix what is heard:
+        // a member left out would be in the headphones with no fader to reach it.
+        auto wholeGroup = [&](const Group& g) {
+            for (const std::string& m : g.members) {
+                std::string kind; int n = 0;
+                if (splitSrc(m, kind, n) && visible(kind, n) && once(m)) out.push_back(look(kind, n));
+            }
+        };
+        for (const Fader& f : p->faders) {
+            if (f.src.rfind("group:", 0) == 0) {
+                for (const Group& g : groups_)
+                    if (f.src == "group:" + g.id) wholeGroup(g);
+                continue;
+            }
+            std::string kind; int n = 0;
+            if (!splitSrc(f.src, kind, n) || !visible(kind, n)) continue;
+            if (const Group* g = groupOfSrc_(f.src)) wholeGroup(*g);
+            else if (!once(f.src)) continue;
+            else out.push_back(look(kind, n));
+            for (Src& x : out) {
+                if (x.id != f.src) continue;
+                if (!f.name.empty())   x.label  = f.name;
+                if (!f.colour.empty()) x.colour = f.colour;
+            }
         }
         return out;
     }
@@ -504,6 +551,7 @@ std::string Mixer::sourcesJson_(const std::string& mix) const
         o += "{\"id\":" + jstr(x.id) + ",\"kind\":" + jstr(x.kind)
            + ",\"n\":" + std::to_string(x.n) + ",\"label\":" + jstr(x.label)
            + ",\"max\":" + std::to_string(maxOf(x.kind)) + ",\"color\":" + jstr(x.colour);
+        if (!x.group.empty()) o += ",\"group\":" + jstr(x.group);
         if (perf) o += ",\"eq\":" + std::to_string(stripLevel_(mix, x.id, "eq"))
                      + ",\"dyn\":" + std::to_string(stripLevel_(mix, x.id, "dyn"))
                      + ",\"fx\":" + std::to_string(stripLevel_(mix, x.id, "fx"));
@@ -512,7 +560,148 @@ std::string Mixer::sourcesJson_(const std::string& mix) const
     return o + "]";
 }
 
-std::string Mixer::snapshotJson_(const std::string& mix) const
+// The group's level is its loudest member's. Everyone else is that many dB below,
+// and stays so in the memo while the group has them under the floor.
+double Mixer::groupDb_(int bus, const Group& g, const std::vector<Src>& members)
+{
+    double top = -300.0;
+    for (const Src& x : members) top = std::max(top, shownDb_(bus, x.kind, x.n));
+    GroupMemo& memo = groupMemo_[std::to_string(bus) + ":" + g.id];
+    if (top <= -300.0) return -300.0;
+    for (const Src& x : members) {
+        const double db = shownDb_(bus, x.kind, x.n);
+        if (db > -300.0) memo[x.id] = db - top;
+    }
+    return top;
+}
+
+std::string Mixer::groupFieldsJson_(int bus, const Group& g, const std::vector<Src>& members)
+{
+    bool allMuted = !members.empty(), allSolo = !members.empty();
+    for (const Src& x : members) {
+        const auto mm = mute_.find(memoKey(bus, x.id));
+        if (mm == mute_.end() || !mm->second.muted) allMuted = false;
+        if (!st_.mixSoloed(busOfKind(x.kind), x.n, bus)) allSolo = false;
+    }
+    return "\"group\":" + jstr(g.id) + ",\"db\":" + jnum(groupDb_(bus, g, members))
+         + ",\"mute\":" + (allMuted ? "1" : "0") + ",\"solo\":" + (allSolo ? "1" : "0");
+}
+
+// The groups this mix has, in the order of their first member.
+std::string Mixer::groupsJson_(const std::string& mix)
+{
+    const int bus = busOfMix_(mix);
+    std::string o = "[";
+    bool first = true;
+    std::vector<std::string> seen;
+    for (const Src& x : sourcesOf_(mix)) {
+        if (x.group.empty() || std::find(seen.begin(), seen.end(), x.group) != seen.end()) continue;
+        seen.push_back(x.group);
+        const auto g = std::find_if(groups_.begin(), groups_.end(), [&](const Group& z) { return z.id == x.group; });
+        if (g == groups_.end()) continue;
+        if (!first) o += ",";
+        first = false;
+        o += "{" + groupFieldsJson_(bus, *g, groupMembers_(mix, g->id))
+           + ",\"label\":" + jstr(g->name.empty() ? std::string("Group") : g->name)
+           + ",\"color\":" + jstr(g->colour) + "}";
+    }
+    return o + "]";
+}
+
+// Each message that can change a group ends here; what did not change stays quiet.
+void Mixer::pushGroups_()
+{
+    if (groups_.empty()) return;
+    for (auto& [id, c] : clients_) {
+        if (!c.authed || c.mix.empty()) continue;
+        const int bus = busOfMix_(c.mix);
+        if (bus < 0) continue;
+        for (const Group& g : groups_) {
+            const std::vector<Src> members = groupMembers_(c.mix, g.id);
+            if (members.empty()) continue;
+            const std::string json = "{\"t\":\"group\",\"mix\":" + jstr(c.mix) + ","
+                                   + groupFieldsJson_(bus, g, members) + "}";
+            std::string& sent = c.groupSent[g.id];
+            if (sent == json) continue;
+            sent = json;
+            send_(id, json);
+        }
+    }
+}
+
+// One member to a level. A muted one stays muted: the level waits for its unmute.
+void Mixer::setMemberDb_(int bus, const Src& x, double db)
+{
+    const double v = asSent(db);
+    MuteMemo& mm = mute_[memoKey(bus, x.id)];
+    if (mm.muted) { mm.db = v; }
+    else osc_("/mix/" + x.kind + "/" + std::to_string(x.n) + "/" + std::to_string(bus) + "/fader", static_cast<float>(v));
+    const std::string src = x.id;
+    broadcastBus_(bus, [&](const std::string& mix) {
+        return "{\"t\":\"update\",\"mix\":" + jstr(mix) + ",\"src\":" + jstr(src) + ",\"db\":" + jnum(v) + "}";
+    });
+}
+
+// The group fader: everyone by the same dB. The member with the least room up
+// stops the group; a member the group took to the floor comes back with it. One
+// that was pulled down on its own has no distance and stays down.
+void Mixer::groupMove_(const std::string& mix, int bus, const Group& g, double db)
+{
+    const std::vector<Src> members = groupMembers_(mix, g.id);
+    if (members.empty()) return;
+    groupDb_(bus, g, members);   // the distances as they are now
+    GroupMemo& memo = groupMemo_[std::to_string(bus) + ":" + g.id];
+    // Nothing up and nothing remembered: all of them from the same place.
+    if (std::none_of(members.begin(), members.end(), [&](const Src& x) { return memo.count(x.id) > 0; }))
+        for (const Src& x : members) memo[x.id] = 0.0;
+    double to = db;
+    for (const Src& x : members) {
+        const auto d = memo.find(x.id);
+        if (d != memo.end()) to = std::min(to, maxOf(x.kind) - d->second);
+    }
+    constexpr double kFloor = -64.5;   // TotalMix' last level, below it the fader is off
+    for (const Src& x : members) {
+        const auto d = memo.find(x.id);
+        if (d == memo.end()) continue;
+        const double v = to + d->second;
+        setMemberDb_(bus, x, (to <= -300.0 || v < kFloor) ? -300.0 : v);
+    }
+}
+
+void Mixer::setMute_(int bus, const std::string& src, bool muted)
+{
+    std::string kind; int n = 0;
+    if (!splitSrc(src, kind, n)) return;
+    const std::string node = "/mix/" + kind + "/" + std::to_string(n) + "/" + std::to_string(bus);
+    MuteMemo& mm = mute_[memoKey(bus, src)];
+    if (mm.muted == muted) return;
+    if (muted) {
+        const double* v = st_.mixFader(busOfKind(kind), n, bus);
+        mm.db    = v ? *v : -300.0;
+        mm.muted = true;
+        osc_(node + "/fader", -300.0f);
+    } else {
+        mm.muted = false;
+        osc_(node + "/fader", static_cast<float>(mm.db));
+    }
+    broadcastBus_(bus, [&](const std::string& mix) {
+        return "{\"t\":\"update\",\"mix\":" + jstr(mix) + ",\"src\":" + jstr(src)
+             + ",\"mute\":" + (muted ? "1" : "0") + "}";
+    });
+}
+
+void Mixer::setSolo_(int bus, const std::string& src, bool solo)
+{
+    std::string kind; int n = 0;
+    if (!splitSrc(src, kind, n)) return;
+    osc_("/mix/" + kind + "/" + std::to_string(n) + "/" + std::to_string(bus) + "/solo", solo ? 1.0f : 0.0f);
+    broadcastBus_(bus, [&](const std::string& mix) {
+        return "{\"t\":\"update\",\"mix\":" + jstr(mix) + ",\"src\":" + jstr(src)
+             + ",\"solo\":" + (solo ? "1" : "0") + "}";
+    });
+}
+
+std::string Mixer::snapshotJson_(const std::string& mix)
 {
     const int bus = busOfMix_(mix);
     const bool perf = perfOfMix_(mix) != nullptr;
@@ -554,7 +743,7 @@ std::string Mixer::snapshotJson_(const std::string& mix) const
         masterExtra = "}";
     }
     return "{\"t\":\"snapshot\",\"mix\":" + jstr(mix)
-         + ",\"sources\":" + sourcesJson_(mix) + ",\"values\":" + values
+         + ",\"sources\":" + sourcesJson_(mix) + ",\"groups\":" + groupsJson_(mix) + ",\"values\":" + values
          + ",\"master\":{\"db\":" + jnum(db) + ",\"mute\":" + (mute ? "1" : "0") + masterExtra + "}";
 }
 
@@ -576,6 +765,7 @@ void Mixer::snapTo_(int id, Client& c)
     c.lvSent.clear();   // a new snapshot rebuilds the cards
     c.fxSent.clear();
     c.srcSig = sourcesJson_(c.mix);
+    c.groupSent.clear();
     send_(id, snapshotJson_(c.mix));
 }
 
@@ -779,6 +969,30 @@ void Mixer::message(int id, const std::string& json, long long nowMs)
     }
     if (m.t == "master" && perf && !perf->master) return;
 
+    if (m.t == "groupSet" || m.t == "groupMute" || m.t == "groupSolo") {
+        const auto g = std::find_if(groups_.begin(), groups_.end(), [&](const Group& z) { return z.id == m.group; });
+        if (g == groups_.end()) return;
+        const std::vector<Src> members = groupMembers_(m.mix, g->id);
+        if (members.empty()) return;
+        if (m.t == "groupSet") {
+            groupMove_(m.mix, bus, *g, clampDb(m.val, 6.0));
+        } else if (m.t == "groupMute") {
+            // All muted: all back. Otherwise the rest join in.
+            const bool all = std::all_of(members.begin(), members.end(), [&](const Src& x) {
+                const auto mm = mute_.find(memoKey(bus, x.id));
+                return mm != mute_.end() && mm->second.muted;
+            });
+            for (const Src& x : members) setMute_(bus, x.id, !all);
+        } else {
+            const bool all = std::all_of(members.begin(), members.end(), [&](const Src& x) {
+                return st_.mixSoloed(busOfKind(x.kind), x.n, bus);
+            });
+            for (const Src& x : members) setSolo_(bus, x.id, !all);
+        }
+        pushGroups_();
+        return;
+    }
+
     if (m.t == "set") {
         std::string kind; int n = 0;
         if (!splitSrc(m.src, kind, n)) return;
@@ -790,10 +1004,15 @@ void Mixer::message(int id, const std::string& json, long long nowMs)
             const bool wasMuted = mm.muted;   // dragging = an explicit level: unmute
             mm.muted = false;
             osc_(node + "/fader", static_cast<float>(db));
+            // Down on its own: it no longer comes back with the group.
+            if (db <= -300.0)
+                if (const Group* g = groupOfSrc_(src))
+                    groupMemo_[std::to_string(bus) + ":" + g->id].erase(src);
             broadcastBus_(bus, [&](const std::string& mix) {
                 return "{\"t\":\"update\",\"mix\":" + jstr(mix) + ",\"src\":" + jstr(src)
                      + ",\"db\":" + jnum(db) + (wasMuted ? ",\"mute\":0}" : "}");
             });
+            pushGroups_();
         } else if (m.ctrl == "pan") {
             const double pan = asSent(clampPan(m.val));
             osc_(node + "/balpan", static_cast<float>(pan));
@@ -807,38 +1026,16 @@ void Mixer::message(int id, const std::string& json, long long nowMs)
     if (m.t == "mute") {
         // No mute per routing in Global OSC: ride the fader to -inf and back,
         // and keep the level the phones show, so the fader only dims.
-        std::string kind; int n = 0;
-        if (!splitSrc(m.src, kind, n)) return;
-        const std::string node = "/mix/" + kind + "/" + std::to_string(n) + "/" + std::to_string(bus);
-        const std::string src = m.src;
-        MuteMemo& mm = mute_[memoKey(bus, src)];
-        if (!mm.muted) {
-            const double* v = st_.mixFader(busOfKind(kind), n, bus);
-            mm.db    = v ? *v : -300.0;
-            mm.muted = true;
-            osc_(node + "/fader", -300.0f);
-        } else {
-            mm.muted = false;
-            osc_(node + "/fader", static_cast<float>(mm.db));
-        }
-        const bool muted = mm.muted;
-        broadcastBus_(bus, [&](const std::string& mix) {
-            return "{\"t\":\"update\",\"mix\":" + jstr(mix) + ",\"src\":" + jstr(src)
-                 + ",\"mute\":" + (muted ? "1" : "0") + "}";
-        });
+        const auto mm = mute_.find(memoKey(bus, m.src));
+        setMute_(bus, m.src, !(mm != mute_.end() && mm->second.muted));
+        pushGroups_();
         return;
     }
     if (m.t == "solo") {   // solo per routing IS native: /mix/<kind>/<n>/<bus>/solo
         std::string kind; int n = 0;
         if (!splitSrc(m.src, kind, n)) return;
-        const bool solo = !st_.mixSoloed(busOfKind(kind), n, bus);
-        osc_("/mix/" + kind + "/" + std::to_string(n) + "/" + std::to_string(bus) + "/solo",
-             solo ? 1.0f : 0.0f);
-        const std::string src = m.src;
-        broadcastBus_(bus, [&](const std::string& mix) {
-            return "{\"t\":\"update\",\"mix\":" + jstr(mix) + ",\"src\":" + jstr(src)
-                 + ",\"solo\":" + (solo ? "1" : "0") + "}";
-        });
+        setSolo_(bus, m.src, !st_.mixSoloed(busOfKind(kind), n, bus));
+        pushGroups_();
         return;
     }
     if (m.t == "master") {
@@ -883,6 +1080,13 @@ void Mixer::sync(const rme::State& st, const rme::Manager::Visible& vis, bool tm
         rme::Bus b; int ch = 0, bus = 0;
         decode(key, b, ch, bus);
         const std::string src = srcOf(b, ch);
+        // Down in TotalMix: as down on its own on the phone (groupMove_).
+        if (v <= -300.0)
+            if (const Group* g = groupOfSrc_(src)) {
+                const auto muted = mute_.find(memoKey(bus, src));
+                if (muted == mute_.end() || !muted->second.muted)
+                    groupMemo_[std::to_string(bus) + ":" + g->id].erase(src);
+            }
         const auto mm = mute_.find(memoKey(bus, src));
         if (mm != mute_.end() && mm->second.muted) {
             if (v <= -300.0) continue;   // our own mute: keep the level shown
@@ -956,6 +1160,7 @@ void Mixer::sync(const rme::State& st, const rme::Manager::Visible& vis, bool tm
     pushConfig_();
     pushStrips_();
     pushFx_();
+    pushGroups_();
 }
 
 // ── EQ, dynamics, FX send ────────────────────────────────────────────────────

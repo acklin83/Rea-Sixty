@@ -60,6 +60,35 @@ body{
 .fader .thumb{position:absolute;top:50%;width:36px;height:36px;border-radius:50%;background:#fff;transform:translate(-50%,-50%);left:0;box-shadow:0 2px 10px rgba(0,0,0,0.4);pointer-events:none;border:2px solid #ddd}
 .fader .nick{position:absolute;top:50%;width:2px;height:14px;background:rgba(255,255,255,0.35);transform:translate(-50%,-50%);pointer-events:none}
 .fader.muted .fill{filter:grayscale(1) brightness(0.5)}
+/* A CHANNEL GROUP: one full fader, its members thinner below it when opened. */
+.gtoggle{background:none;border:none;color:var(--fg2);font-size:15px;line-height:1;padding:4px 8px 4px 0;cursor:pointer;flex:none;transition:transform .12s}
+.card.group.open .gtoggle{transform:rotate(90deg)}
+.card.thin{margin-left:16px;padding:6px 12px 7px;margin-bottom:6px}
+.card.thin.closed{display:none}
+.card.thin .row1{margin-bottom:3px;min-height:0}
+.card.thin .name,.card.thin .db{font-size:13px}
+.card.thin .name{font-weight:600}
+.card.thin .fader{height:24px;border-radius:12px;margin-bottom:4px}
+.card.thin .fader .fill{border-radius:12px}
+.card.thin .fader .thumb{width:22px;height:22px}
+.card.thin .fader .nick{height:10px}
+.card.thin .ctrl{gap:6px}
+.card.thin .pan{height:20px}
+.card.thin .pan .pthumb{width:14px;height:14px}
+.card.thin .btn{width:32px;height:26px;border-radius:8px;font-size:13px}
+/* Strips: thinner, and the same 0 dB height as their neighbours. */
+.card.thin .tick{display:none}
+#mix.wide .card.thin{flex:0 0 70px;margin-left:0;padding:12px 4px 10px;margin-bottom:0}
+#mix.wide .card.thin .row1{min-height:42px;justify-content:flex-start}
+#mix.wide .card.thin .fader{width:40px;height:auto;border-radius:0;margin:8px auto}
+#mix.wide .card.thin .fader .thumb{width:36px;height:18px;border-radius:4px}
+#mix.wide .card.thin .btn{width:100%;height:30px}
+#mix.wide .gtoggle{position:absolute;top:6px;left:6px;padding:4px;z-index:2}
+@media (max-height:500px){
+  #mix.wide .card.thin{flex:0 0 92px;padding:5px}
+  #mix.wide .card.thin .row1{min-height:0}
+  #mix.wide .card.thin .fader{margin:9px 0}
+}
 .card.muted{padding:6px 14px}
 .card.muted .row1{margin-bottom:0;min-height:46px;align-items:center;padding-right:54px}
 .card.muted .fader,.card.muted .pan,.card.muted .btn.solo,.card.muted .db{display:none}
@@ -623,6 +652,7 @@ let state = {
   mixId: null,          // selected mix id
   selName: '',
   recvs: [],            // per-source values, same index order as state.sources: [{vol(amp),pan,mute}]
+  groups: [],           // [{id,label,color,vol,db,mute,solo}] from the snapshot
   master: {vol:1, mute:0},
   lastReplyT: 0,
   connected: false,
@@ -657,8 +687,18 @@ function fmtDb(db){
   return (db>0?'+':'') + db.toFixed(1) + ' dB';
 }
 // fader ceiling for a card: master/output 0 dB, source = its configured max
+// A group's cards answer to a send number of their own, above the sources' and the master's.
+const GROUP_SEND = 1000;
+const groupOf = sendId => sendId >= GROUP_SEND ? state.groups[sendId-GROUP_SEND] : null;
+function groupsOpen(){ try { return JSON.parse(localStorage.getItem('moreme.groups.'+state.mixId) || '{}'); } catch(_){ return {}; } }
+function setGroupOpen(id, on){
+  const o = groupsOpen();
+  if (on) o[id] = 1; else delete o[id];
+  try { localStorage.setItem('moreme.groups.'+state.mixId, JSON.stringify(o)); } catch(_){}
+}
 function srcMax(sendId){
   if (sendId === 0) return 0;
+  if (groupOf(sendId)) return 6;
   const s = state.sources[-sendId-1];
   return s ? s.max : 6;
 }
@@ -742,13 +782,15 @@ function drawFaderMeter(card, mt, wide, col, dt, fillPos){
 }
 function cardFillPos(sendId){
   if (sendId === 0) return ampToPos(state.master.vol);
+  const gr = groupOf(sendId);
+  if (gr) return ampToPos(gr.vol);
   const r = state.recvs[-sendId-1];
   return r ? ampToPos(r.vol) : 0;
 }
 function cardColour(sendId){
   // The master takes the mix's colour: the performer's, or the output's on Phones 1-4.
   const m = sendId === 0 ? state.mixes.find(x=>x.id===state.mixId)
-                         : state.sources[-sendId-1];
+          : groupOf(sendId) || state.sources[-sendId-1];
   const c = (m && m.color) || '#0099FF';
   return /^#[0-9a-fA-F]{6}$/.test(c) ? c : '#0099FF';
 }
@@ -834,6 +876,7 @@ function handleMsg(m){
         const v = (m.values && m.values[s.id]) || {};
         return { vol: dbToAmp(v.db != null ? v.db : -300), pan: v.pan || 0, mute: v.mute ? 1 : 0, solo: v.solo ? 1 : 0, fx: v.fx != null ? v.fx : -65 };
       });
+      state.groups = (m.groups || []).map(g=>({ id:g.group, label:g.label, color:g.color, vol:dbToAmp(g.db), db:g.db, mute:g.mute?1:0, solo:g.solo?1:0 }));
       state.master.vol = dbToAmp((m.master&&m.master.db) != null ? m.master.db : -300);
       state.master.mute = (m.master&&m.master.mute) ? 1 : 0;
       state.master.shown = !(m.master && m.master.shown === 0);
@@ -855,6 +898,15 @@ function handleMsg(m){
       if (m.mute !== undefined) r.mute = m.mute?1:0;
       if (m.solo !== undefined) r.solo = m.solo?1:0;
       if (m.fx !== undefined && !(dragging && state.dragKind==='fx')) r.fx = m.fx;
+      break;
+    }
+    case 'group':{
+      if (m.mix !== state.mixId) break;
+      const i = state.groups.findIndex(g=>g.id===m.group);
+      if (i < 0) break;
+      const g = state.groups[i];
+      g.db = m.db; g.mute = m.mute?1:0; g.solo = m.solo?1:0;
+      if (!(state.dragSend === GROUP_SEND+i && state.dragKind==='vol')) g.vol = dbToAmp(m.db);
       break;
     }
     case 'levels':
@@ -1049,12 +1101,38 @@ function renderMix(){
 
   const recvCnt = state.sources.length;
   let sig = 'M' + (state.master.shown === false ? '0' : '') + ':' + (state.master.eq||0) + (state.master.dyn||0) + (state.master.al||0);
-  for (const s of state.sources) sig += '|'+s.id+':'+(s.eq||0)+(s.dyn||0)+(s.fx||0);
+  for (const s of state.sources) sig += '|'+s.id+':'+(s.eq||0)+(s.dyn||0)+(s.fx||0)+(s.group||'');
+  for (const g of state.groups) sig += '|g'+g.id;
   if (root.dataset.sig !== sig){
     root.dataset.sig = sig;
     root.innerHTML = '';
     root.appendChild(buildCard({master:true}));
-    for (let y=1;y<=recvCnt;y++) root.appendChild(buildCard({recv:y}));
+    // ⇨ A GROUP SITS WHERE ITS FIRST MEMBER WOULD, the others join it. Hidden on
+    // this phone or not, the group is there: only the member cards can go.
+    const open = groupsOpen(), placed = new Set();
+    const placeGroup = id => {
+      if (placed.has(id)) return;
+      placed.add(id);
+      const i = state.groups.findIndex(g=>g.id===id);
+      if (i < 0) return;
+      const c = buildCard({group:i});
+      c.classList.toggle('open', !!open[id]);
+      root.appendChild(c);
+      for (let y=1;y<=recvCnt;y++){
+        if (state.sources[y-1].group !== id) continue;
+        const t = buildCard({recv:y});
+        t.classList.add('thin');
+        t.classList.toggle('closed', !open[id]);
+        t.dataset.member = id;
+        root.appendChild(t);
+      }
+    };
+    for (let y=1;y<=recvCnt;y++){
+      const s = state.sources[y-1];
+      if (s.group && state.groups.some(g=>g.id===s.group)) placeGroup(s.group);
+      else root.appendChild(buildCard({recv:y}));
+    }
+    for (const g of state.groups) placeGroup(g.id);
     alignFaders();
   } else if (root.dataset.alignW !== (root.classList.contains('wide')?'w':'l')+innerWidth+'x'+innerHeight){
     alignFaders();
@@ -1065,6 +1143,7 @@ function renderMix(){
       && [...root.querySelectorAll('.card')].some(c=>c.scrollHeight > c.clientHeight + 1)) alignFaders();
   updateCard(root.querySelector('[data-send="0"]'), {master:true});
   for (let y=1;y<=recvCnt;y++) updateCard(root.querySelector('[data-send="'+(-y)+'"]'), {recv:y});
+  state.groups.forEach((g,i)=>updateCard(root.querySelector('[data-send="'+(GROUP_SEND+i)+'"]'), {group:i}));
 }
 
 // ⇨ ONE LENGTH FOR ALL FADERS, so 0 dB is at the same height on every strip. A strip
@@ -1107,12 +1186,14 @@ function stripKeysHtml(sendId){
 }
 function buildCard(opts){
   const isMaster = !!opts.master;
-  const sendId = isMaster ? 0 : -opts.recv;
+  const isGroup = opts.group !== undefined;
+  const sendId = isMaster ? 0 : isGroup ? GROUP_SEND+opts.group : -opts.recv;
   const card = document.createElement('div');
-  card.className = 'card' + (isMaster?' master':'');
+  card.className = 'card' + (isMaster?' master':'') + (isGroup?' group':'');
   card.dataset.send = sendId;
   card.innerHTML =
     '<div class="row1">'+
+      (isGroup ? '<button class="gtoggle" aria-label="Open group">&#9656;</button>' : '')+
       '<div class="name"></div>'+
       '<div class="db"></div>'+
     '</div>'+
@@ -1126,7 +1207,9 @@ function buildCard(opts){
     '</div>'+
     '<div class="meter h"></div>'+
     stripKeysHtml(sendId)+
-    (isMaster ? '' :
+    (isGroup ?
+      '<div class="ctrl" style="justify-content:flex-end"><button class="btn mute" data-act="mute">M</button><button class="btn solo" data-act="solo">S</button></div>'
+      : isMaster ? '' :
       '<div class="ctrl">'+
         '<div class="pan"><span class="plabel l">L</span><span class="center"></span><div class="pthumb"></div><span class="plabel r">R</span></div>'+
         '<button class="btn mute" data-act="mute">M</button>'+
@@ -1138,24 +1221,35 @@ function buildCard(opts){
 
   const fader = card.querySelector('.fader');
   wireSlider(fader, sendId, 'vol');
-  if (!isMaster){
+  if (!isMaster && !isGroup){
     wireSlider(card.querySelector('.pan'), sendId, 'pan');
   }
+  if (isGroup) card.querySelector('.gtoggle').addEventListener('click', ()=>{
+    const id = state.groups[opts.group].id;
+    const on = card.classList.toggle('open');
+    setGroupOpen(id, on);
+    $('mix').querySelectorAll('.card.thin').forEach(c=>{ if (c.dataset.member === id) c.classList.toggle('closed', !on); });
+    alignFaders();
+    updateUI();
+  });
   card.querySelectorAll('[data-act="mute"]').forEach(b=>b.addEventListener('click', ()=>toggleMute(sendId)));
   card.querySelectorAll('[data-strip]').forEach(b=>b.addEventListener('click', ()=>stripOpen(sendId, b.dataset.strip)));
   if (card.querySelector('.fxb')) wireSlider(card.querySelector('.fxb'), sendId, 'fx');
   if (isMaster && state.master.shown === false) card.classList.add('nomaster');
   const solo = card.querySelector('[data-act="solo"]');
-  if (solo) solo.addEventListener('click', ()=>toggleSolo(-sendId));
+  if (solo) solo.addEventListener('click', ()=>isGroup ? toggleGroupSolo(opts.group) : toggleSolo(-sendId));
   return card;
 }
 
 function updateCard(card, opts){
   if (!card) return;
   const isMaster = !!opts.master;
+  const gr = opts.group !== undefined ? state.groups[opts.group] : null;
   let vol, pan=0, mute=0, name='', col='#0099FF';
   if (isMaster){
     vol = state.master.vol; mute = state.master.mute; name = 'MASTER OUT';
+  } else if (gr){
+    vol = gr.vol; mute = gr.mute; name = gr.label;
   } else {
     const r = state.recvs[opts.recv-1];
     if (!r) return;
@@ -1195,7 +1289,8 @@ function updateCard(card, opts){
   } else {
     fill.style.width = pc;
     // keep the round thumb fully inside the card (overflow:hidden clips it at the ends)
-    thumb.style.left = 'clamp(18px, '+pc+', calc(100% - 18px))';
+    const half = card.classList.contains('thin') ? 11 : 18;
+    thumb.style.left = 'clamp('+half+'px, '+pc+', calc(100% - '+half+'px))';
     nick.style.left = zero;
     fill.style.height=''; thumb.style.bottom=''; nick.style.bottom='';
   }
@@ -1208,6 +1303,9 @@ function updateCard(card, opts){
     const mc = cardColour(0);
     fill.style.background = 'linear-gradient('+(isWide()?'0deg':'90deg')+', color-mix(in srgb,'+mc+' 60%, black), '+mc+')';
     card.querySelector('.name').style.setProperty('--mix', mc);
+  } else if (gr){
+    const mc = cardColour(GROUP_SEND+opts.group);
+    fill.style.background = 'linear-gradient('+(isWide()?'0deg':'90deg')+', color-mix(in srgb,'+mc+' 60%, black), '+mc+')';
   } else {
     fill.style.background = 'linear-gradient(90deg, color-mix(in srgb,'+col+' 60%, black), '+col+')';
     const pn = card.querySelector('.pan');
@@ -1228,7 +1326,7 @@ function updateCard(card, opts){
   }
   card.querySelectorAll('[data-act="mute"]').forEach(b=>b.classList.toggle('on', displayMute));
   const sBtn = card.querySelector('[data-act="solo"]');
-  if (sBtn) sBtn.classList.toggle('on', !isMaster && !!(state.recvs[opts.recv-1] && state.recvs[opts.recv-1].solo));
+  if (sBtn) sBtn.classList.toggle('on', gr ? !!gr.solo : !isMaster && !!(state.recvs[opts.recv-1] && state.recvs[opts.recv-1].solo));
 }
 
 // ---- SLIDER WIRING (tap/scroll-friendly) ----
@@ -1335,9 +1433,15 @@ function applyVol(sendId, amp, isEnd){
   const max = srcMax(sendId);
   if (!isFinite(db) || db <= -90){ db = -300; amp = 0; }
   else if (db > max){ db = max; amp = dbToAmp(max); }
+  const gr = groupOf(sendId);
   if (sendId === 0){
     state.master.vol = amp;
     wsSend({t:'master', mix:state.mixId, ctrl:'vol', val:db, end:!!isEnd});
+  } else if (gr){
+    gr.vol = amp;
+    wsSend({t:'groupSet', mix:state.mixId, group:gr.id, val:db});
+    // Where the member with the least room stopped it: ORC's answer wins after the drag.
+    if (isEnd) setTimeout(()=>{ if (state.dragSend !== sendId){ gr.vol = dbToAmp(gr.db); refreshCard(sendId); } }, 200);
   } else {
     const i = -sendId-1;
     if (state.recvs[i]) state.recvs[i].vol = amp;
@@ -1358,7 +1462,7 @@ function applyPan(sendId, pan, isEnd){
 // Immediate visual feedback while dragging: don't wait for the 250ms tick.
 function refreshCard(sendId){
   const card = $('mix').querySelector('[data-send="'+sendId+'"]');
-  if (card) updateCard(card, sendId === 0 ? {master:true} : {recv:-sendId});
+  if (card) updateCard(card, sendId === 0 ? {master:true} : groupOf(sendId) ? {group:sendId-GROUP_SEND} : {recv:-sendId});
 }
 
 // re-render keeping the tapped card visually fixed (WebKit has no scroll anchoring)
@@ -1384,6 +1488,11 @@ function toggleMute(sendId){
     state.master.mute = state.master.mute ? 0 : 1;
     wsSend({t:'master', mix:state.mixId, ctrl:'mute'});
     refreshCard(0);
+  } else if (groupOf(sendId)){
+    const gr = groupOf(sendId);
+    gr.mute = gr.mute ? 0 : 1;
+    wsSend({t:'groupMute', mix:state.mixId, group:gr.id});
+    refreshCard(sendId);
   } else {
     const r = state.recvs[-sendId-1];
     if (r) r.mute = r.mute ? 0 : 1;
@@ -1396,6 +1505,14 @@ function toggleMute(sendId){
 
 // Native per-submix solo (TotalMix /mix/<kind>/<n>/<bus>/solo): doesn't touch
 // any fader and doesn't affect other headphones.
+function toggleGroupSolo(i){
+  const gr = state.groups[i];
+  if (!state.mixId || !gr) return;
+  gr.solo = gr.solo ? 0 : 1; // optimistic
+  wsSend({t:'groupSolo', mix:state.mixId, group:gr.id});
+  navigator.vibrate && navigator.vibrate(12);
+  refreshCard(GROUP_SEND+i);
+}
 function toggleSolo(recv){
   if (!state.mixId) return;
   const r = state.recvs[recv-1]; if (!r) return;

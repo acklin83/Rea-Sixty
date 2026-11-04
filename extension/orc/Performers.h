@@ -20,7 +20,7 @@
 namespace orc::phones {
 
 struct Fader {
-    std::string src;      // "in:3", "pb:5"
+    std::string src;      // "in:3", "pb:5", "group:<id>"
     std::string name;     // "" = TotalMix' name
     std::string colour;   // "#rrggbb", "" = TotalMix' colour
 };
@@ -42,10 +42,27 @@ struct Performer {
     bool hide = false;
 };
 
+// ⇨ A CHANNEL GROUP (Frank 04.11.2026): one fader on the phones for its members,
+// which all move by the same dB. It belongs to the snapshot, not to a performer.
+// A channel is in one group at most.
+struct Group {
+    std::string id;       // lower case letters and digits, as a link id
+    std::string name;
+    std::string colour;   // "#rrggbb"
+    std::vector<std::string> members;   // "in:3", "pb:5"
+    bool operator==(const Group&) const = default;
+};
+
+struct Snapshot {
+    std::vector<Performer> performers;
+    std::vector<Group>     groups;
+};
+
 struct Book {
     std::vector<Performer> performers;
+    std::vector<Group>     groups;
     std::string current;   // the name of the snapshot in use, "" = none
-    std::map<std::string, std::vector<Performer>> snapshots;
+    std::map<std::string, Snapshot> snapshots;
 };
 
 std::string bookJson(const Book& b);

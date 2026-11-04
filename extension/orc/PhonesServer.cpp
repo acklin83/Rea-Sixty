@@ -378,6 +378,7 @@ void Server::loop()
     Book          book;
     parseBook(orc_handover::readFile(performersPath()), book);
     mixer.setPerformers(book.performers);
+    mixer.setGroups(book.groups);
     bool          firstPin   = true;
     std::string   tmHost;
     auto          lastHost   = clock::now() - std::chrono::hours(1);
@@ -491,6 +492,7 @@ void Server::loop()
             if (!orc_handover::writeFile(performersPath(), bookJson(book)))
                 orc::logLine("MoreMe: cannot write %s\n", performersPath().c_str());
             mixer.setPerformers(book.performers);
+            mixer.setGroups(book.groups);
         }
     };
     auto onFrames = [&](Conn& c, long long nowMs) {
