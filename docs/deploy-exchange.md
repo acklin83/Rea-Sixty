@@ -45,7 +45,7 @@ From a checkout on the Mac:
 
 ```sh
 rsync -az --delete \
-  --exclude 'node_modules/' --exclude 'var/' --exclude '.env*' \
+  --exclude 'node_modules/' --exclude 'var/' --exclude 'backups/' --exclude '.env*' \
   server/ root@srv1401714.hstgr.cloud:/opt/reasixty/
 
 ssh root@srv1401714.hstgr.cloud 'cd /opt/reasixty && docker compose up -d --build'
@@ -53,6 +53,8 @@ ssh root@srv1401714.hstgr.cloud 'cd /opt/reasixty && docker compose up -d --buil
 
 `--exclude 'var/'` is not optional: without it a local `--reset` database
 overwrites production.
+`--exclude 'backups/'` is not optional either: the folder exists only on the
+box, so `--delete` would wipe the on-box backups in `/opt/reasixty/backups`.
 
 Verify on the box (Caddy is not involved yet):
 

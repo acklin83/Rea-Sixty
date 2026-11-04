@@ -208,6 +208,14 @@ test('the last credential cannot be removed — that would be an unrecoverable l
   assert.equal(r.json().error, 'last_credential');
 });
 
+test('passkey options demand user verification, because the verify step does', async () => {
+  const { cookie } = await signIn('passkey@example.com');
+  const reg = await app.inject({ method: 'POST', url: '/auth/passkey/register/options', headers: auth(cookie) });
+  assert.equal(reg.json().options.authenticatorSelection.userVerification, 'required');
+  const login = await app.inject({ method: 'POST', url: '/auth/passkey/login/options' });
+  assert.equal(login.json().options.userVerification, 'required');
+});
+
 // ------------------------------------------------------------- moderation
 
 test('the admin surface answers 404 to a non-admin, never 403', async () => {

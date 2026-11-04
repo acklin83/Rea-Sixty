@@ -232,7 +232,9 @@ export async function registerAuthRoutes(app) {
       })),
       authenticatorSelection: {
         residentKey: 'preferred',
-        userVerification: 'preferred',
+        // Must match the verify step. 'preferred' let an authenticator skip the
+        // check and then be refused only after it had stored the passkey.
+        userVerification: 'required',
       },
     });
 
@@ -256,6 +258,7 @@ export async function registerAuthRoutes(app) {
         expectedChallenge: row.challenge,
         expectedOrigin: expectedOrigins(),
         expectedRPID: rpID(),
+        requireUserVerification: true,
       });
     } catch (err) {
       return reply.code(400).send({ error: 'verify_failed', detail: err.message });
@@ -295,7 +298,7 @@ export async function registerAuthRoutes(app) {
   }, async () => {
     const options = await generateAuthenticationOptions({
       rpID: rpID(),
-      userVerification: 'preferred',
+      userVerification: 'required',
     });
     const token = insertChallenge({
       kind: 'webauthn_auth', challenge: options.challenge, ttl: WEBAUTHN_TTL,
@@ -328,6 +331,7 @@ export async function registerAuthRoutes(app) {
         expectedChallenge: row.challenge,
         expectedOrigin: expectedOrigins(),
         expectedRPID: rpID(),
+        requireUserVerification: true,
         credential: {
           id: cred.webauthn_id,
           publicKey: new Uint8Array(cred.public_key),
