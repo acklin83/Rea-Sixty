@@ -252,8 +252,8 @@ seconds like the UF1.</td></tr>
 <tr><th>TotalMix</th><td>The link to TotalMix, see <a href="#trouble">when something is off</a>.</td></tr>
 <tr><th>MoreMe</th><td>The headphone mixer (<a href="#moreme">MoreMe</a>): <em>off</em>, or how many
 phones are connected. While it is on, the address for the musicians and the PIN follow, and the
-address as a QR code to scan. A click on the address copies it. <em>Studio Control…</em> opens
-<a href="#moreme">Studio Control</a>.</td></tr>
+address as a QR code to scan. A click on the address copies it. <em>Studio Control…</em> opens the
+<a href="#moreme">performers</a> on the settings page MoreMe.</td></tr>
 <tr><th>Settings…</th><td>Opens <a href="#settings">the settings window</a>.</td></tr>
 <tr><th>Manual</th><td>Opens this page.</td></tr>
 <tr><th>Quit ORC</th><td>Lets go of the UF1 and TotalMix and quits.</td></tr>
@@ -1072,13 +1072,13 @@ stay on the phones during a recording.</p>
 <p>The phones show the channels TotalMix sends: a channel you hide in TotalMix' layout does not show
 on them. ORC asks TotalMix again every three seconds, so a channel you hide or show appears or goes
 away on the phones a few seconds later. All headphone mixes show the same channels.</p>
-<h3>Performers and Studio Control</h3>
-<p>Studio Control gives each musician an own link and an own layout. Without performers, the phones
+<h3>Performers</h3>
+<p>Each musician can get an own link and an own layout. Without performers, the phones
 pick Phones 1 to 4 as above. As soon as there is a performer, the phones list performers instead.</p>
-<p>It fills the settings page <a href="#set-moreme">MoreMe</a> while MoreMe is on. The menu bar opens it
-too. It runs on this computer only and needs no PIN.</p>
+<p>You set them up on the settings page <a href="#set-moreme">MoreMe</a> while MoreMe is on. The menu bar
+opens that page too. It runs on this computer only and needs no PIN.</p>
 <figure class="shot"><img src="shot:orc-settings-studio-control" width="1600" height="1025" loading="lazy"
-alt="Studio Control on the page MoreMe: four performers on Phones 1 to 4, one performer's faders and access, its QR code and a preview of its phone page"></figure>
+alt="The page MoreMe: four performers on Phones 1 to 4, one performer's faders and access, its QR code and a preview of its phone page"></figure>
 <table class="data"><tbody>
 <tr><th>Performers</th><td>One per musician. Each shows its output, its faders and what it may change.</td></tr>
 <tr><th>Output</th><td>Phones 1 to 4, Main, Main B, or any other output TotalMix shows. A role follows
@@ -1291,7 +1291,7 @@ of the box 7003.</td></tr>
 <tr><th>Studio name</th><td>Shown on the page. Empty out of the box.</td></tr>
 <tr><th>Logo</th><td>The picture on the page's start screen, PNG, JPG or SVG. <em>Default Logo</em>
 goes back to the one ORC comes with.</td></tr>
-<tr><th>Studio Control</th><td>Below these, while MoreMe is on: the performers and their links
+<tr><th>Performers</th><td>Below these, while MoreMe is on: the performers and their links
 (<a href="#moreme">MoreMe</a>). <em>Setup</em> shows or hides the ports, the studio name and the logo.</td></tr>
 </tbody></table>
 </section>
@@ -1374,7 +1374,7 @@ next to it the logo, if you picked one.</td></tr>
 <tr><th><code>~/Library/Application Support/ORC/moreme.pin</code></th><td>MoreMe's PIN, readable
 by your user only.</td></tr>
 <tr><th><code>~/Library/Application Support/ORC/moreme-performers.json</code></th><td>The performers and the
-snapshots of Studio Control.</td></tr>
+snapshots of the performers.</td></tr>
 <tr><th><code>/tmp/orc.log</code></th><td>ORC's log. Useful with a bug report.</td></tr>
 </tbody></table>
 <p>To start from scratch, quit ORC and remove the folder <code>~/Library/Application Support/ORC</code>.</p>
