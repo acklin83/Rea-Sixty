@@ -231,7 +231,10 @@ function drawEdit(){
 function drawFaders(){
   const p=P(),isTm=p.useLayout;
   $('#laySeg').innerHTML=['TotalMix layout','Own'].map((t,i)=>'<button class="'+((i===0)===isTm?'on':'')+'" data-l="'+i+'">'+t+'</button>').join('');
+  // ⛔ Every handler asks P() again: a state from ORC replaces S and leaves the row
+  // alone under a cursor, so the `p` of this drawing can be an old copy by then.
   document.querySelectorAll('[data-l]').forEach(b=>b.onclick=()=>{
+    const p=P();if(!p)return;
     p.useLayout=b.dataset.l==='0';
     if(!p.useLayout&&!p.faders.length)copyLayout(p);
     drawFaders();changed();
@@ -256,19 +259,20 @@ function drawFaders(){
       +'<select data-s="'+i+'" aria-label="Source">'+options(x)+'</select>'
       +'<button class="x" data-x="'+i+'" aria-label="Remove">&times;</button></div>';
   }).join('')||'<div class="empty">No faders yet.</div>';
-  document.querySelectorAll('[data-c]').forEach(e=>e.oninput=()=>{p.faders[e.dataset.c].colour=e.value;push()});
-  document.querySelectorAll('[data-n]').forEach(e=>e.oninput=()=>{p.faders[e.dataset.n].name=e.value;push()});
-  document.querySelectorAll('[data-s]').forEach(e=>e.onchange=()=>{p.faders[e.dataset.s].src=e.value;drawFaders();changed()});
-  document.querySelectorAll('[data-x]').forEach(e=>e.onclick=()=>{p.faders.splice(+e.dataset.x,1);drawFaders();changed()});
+  document.querySelectorAll('[data-c]').forEach(e=>e.oninput=()=>{const p=P();if(!p)return;p.faders[e.dataset.c].colour=e.value;push()});
+  document.querySelectorAll('[data-n]').forEach(e=>e.oninput=()=>{const p=P();if(!p)return;p.faders[e.dataset.n].name=e.value;push()});
+  document.querySelectorAll('[data-s]').forEach(e=>e.onchange=()=>{const p=P();if(!p)return;p.faders[e.dataset.s].src=e.value;drawFaders();changed()});
+  document.querySelectorAll('[data-x]').forEach(e=>e.onclick=()=>{const p=P();if(!p)return;p.faders.splice(+e.dataset.x,1);drawFaders();changed()});
   dragSort($('#faders'),order=>{
     sorting=false;
+    const p=P();if(!p)return;
     p.faders=order.map(i=>p.faders[+i]);
     drawFaders();changed();
   });
   const rest=k=>S.channels.filter(c=>c.kind===k&&!p.faders.some(f=>f.src===c.id));
   const row=(l,k)=>rest(k).length?'<div class="chips"><span class="lbl chl">'+l+'</span>'+rest(k).map(c=>'<span class="chip" data-q="'+c.id+'">+ '+esc(c.label)+'</span>').join('')+'</div>':'';
   $('#quick').innerHTML=row('Inputs','in')+row('Playbacks','pb');
-  document.querySelectorAll('[data-q]').forEach(e=>e.onclick=()=>{p.faders.push({src:e.dataset.q,name:'',colour:''});drawFaders();changed()});
+  document.querySelectorAll('[data-q]').forEach(e=>e.onclick=()=>{const p=P();if(!p)return;p.faders.push({src:e.dataset.q,name:'',colour:''});drawFaders();changed()});
 }
 // ⇨ SORT BY THE GRIP, mouse or finger. The row under the finger stays where it is
 // in the page and its neighbours move past it: taking it out of the page would
@@ -311,7 +315,7 @@ function drawSegs(){
     const o=s.dataset.o.split(','),k=s.dataset.k,num=!!s.dataset.n;
     const cur=num?p[k]:(p[k]?1:0);
     s.innerHTML=o.map((t,i)=>'<button class="'+(cur===i?'on':'')+(t==='Off'?' o':'')+'" data-v="'+i+'">'+t+'</button>').join('');
-    s.querySelectorAll('button').forEach(b=>b.onclick=()=>{p[k]=num?+b.dataset.v:b.dataset.v==='1';drawSegs();changed()});
+    s.querySelectorAll('button').forEach(b=>b.onclick=()=>{const p=P();if(!p)return;p[k]=num?+b.dataset.v:b.dataset.v==='1';drawSegs();changed()});
   });
 }
 function drawRight(){
