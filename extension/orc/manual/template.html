@@ -1061,6 +1061,8 @@ stay on the phones during a recording.</p>
       <code>7004</code>. These are MoreMe's numbers out of the box. For the level meters on the
       phones, switch <em>Send Peak Level</em> on for this remote too. TotalMix opens a new remote's
       port when it starts, so restart TotalMix after setting it up.</li>
+  <li>In TotalMix' Control Room, assign your headphone outputs as Phones 1 to 4. Those are the mixes the
+      phones offer. A <a href="#moreme">performer</a> can use any output instead.</li>
   <li>In ORC, settings window, page <a href="#set-moreme">MoreMe</a>, switch
       <em>Headphone mixes in the browser</em> on. ORC makes a four-digit PIN.</li>
   <li>Give the musicians the address and the PIN from the menu bar, or let them scan the QR code.
@@ -1313,6 +1315,18 @@ start it again.</td></tr>
 like <code>192.168.1.20</code>.</td></tr>
 <tr><td>TotalMix stopped answering (quit, or the remote is off)</td><td>It was online and went quiet.
 Check that TotalMix is running and the remote is still <em>In Use</em>.</td></tr>
+</tbody></table>
+<h3>No channels or no mixes</h3>
+<table class="data"><thead><tr><th>You see</th><th>What it means, what to do</th></tr></thead><tbody>
+<tr><td>TotalMix is online, but no channels at all</td><td>In TotalMix, under OSC Details, <em>Send changes</em>
+has to be on for that remote.</td></tr>
+<tr><td>A channel is missing</td><td>It is hidden in the TotalMix layout. ORC shows what TotalMix shows.</td></tr>
+<tr><td>Phone: No headphone mixes found</td><td>No output is assigned as Phones 1 to 4 in TotalMix' Control
+Room, or the remote of MoreMe cannot see those outputs in the layout.</td></tr>
+<tr><td>Phone: ORC is there, TotalMix does not answer</td><td>MoreMe has its own remote. Check its ports, tick
+<em>In Use</em>, and restart TotalMix after adding it (<a href="#moreme">MoreMe</a>).</td></tr>
+<tr><td>Phone: This page cannot reach the studio computer</td><td>ORC is not running, MoreMe is off, or the phone is on
+another network.</td></tr>
 </tbody></table>
 <h3>The UF1 line</h3>
 <table class="data"><thead><tr><th>It says</th><th>What it means, what to do</th></tr></thead><tbody>
