@@ -267,7 +267,7 @@ int main()
         const auto end = clk::now() + std::chrono::seconds(5);
         while (clk::now() < end && !mix.saw("/sendall 1")) mix.pump(100);
         mix.say("/mix/in/1/8/fader", -6.0f);
-        std::this_thread::sleep_for(std::chrono::milliseconds(600));   // the 400 ms window
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));   // the round ends 400 ms after its last message
 
         b.sendText(R"({"t":"select","mix":"phone1"})");
         const std::string snap = b.messages(500);
@@ -284,15 +284,30 @@ int main()
 
         // TotalMix moves it: the phone follows.
         // ⛔ Not before the next ask: an open round drops what comes back for a
-        // node just written (Manager::workerLoop), and this mixer never closes
-        // a round with names. Without the wait the line hung on the follow-up
-        // ask falling between the write and here, by 100 ms.
+        // node just written (Manager::workerLoop). Without the wait the line hung
+        // on the follow-up ask falling between the write and here, by 100 ms.
         mix.got.clear();
         const auto askBy = clk::now() + std::chrono::seconds(5);
         while (clk::now() < askBy && !mix.saw("/sendall 1")) mix.pump(100);
         EXPECT(mix.saw("/sendall 1"));
         mix.say("/mix/in/1/8/fader", -12.0f);
         EXPECT(has(b.messages(400), R"("src":"in:1","db":-12)"));
+
+        // ⛔ A round with every channel in the layout: TotalMix takes two seconds and
+        // sends the submix nodes last. They still count, however late they come.
+        mix.got.clear();
+        const auto slowBy = clk::now() + std::chrono::seconds(5);
+        while (clk::now() < slowBy && !mix.saw("/sendall 1")) mix.pump(100);
+        EXPECT(mix.saw("/sendall 1"));
+        const auto namesUntil = clk::now() + std::chrono::milliseconds(700);
+        while (clk::now() < namesUntil) {
+            mix.sayName("/input/1/name", "Kick");
+            mix.sayName("/input/2/name", "Snare");
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        mix.say("/mix/in/1/8/fader", -12.0f);
+        mix.say("/mix/in/2/8/fader", -9.0f);
+        EXPECT(has(b.messages(1200), R"("label":"Snare")"));
 
         // A second phone sees it taken.
         Browser c;
