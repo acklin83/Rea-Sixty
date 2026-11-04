@@ -49,7 +49,7 @@ body{
 .card.master{background:linear-gradient(180deg,#1a2233 0%,var(--bg2) 100%);border:1px solid #223040}
 .card .row1{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;gap:8px;min-height:22px}
 .card .name{font-weight:700;font-size:16px;letter-spacing:-0.01em;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.card.master .name{font-family:'Inter Tight',sans-serif;font-weight:900;font-style:italic;font-size:16px;letter-spacing:0.05em;text-transform:uppercase;color:var(--accent)}
+.card.master .name{font-family:'Inter Tight',sans-serif;font-weight:900;font-style:italic;font-size:16px;letter-spacing:0.05em;text-transform:uppercase;color:var(--mix,var(--accent))}
 .card .db{font-variant-numeric:tabular-nums;font-size:16px;color:var(--fg2);font-weight:500;min-width:70px;text-align:right}
 .card .db.hot{color:var(--yellow)}
 .card .db.clip{color:var(--red2)}
@@ -289,6 +289,7 @@ body{
 /* LIGHT */
 body.light{--bg:#eef0f3;--bg2:#fff;--bg3:#dfe2e7;--fg:#111;--fg2:#555;--fg3:#888}
 body.light .card.master{background:#fff;border-color:#b9d4ea}
+body.light .card.master:not(.muted) .name{color:var(--fg)}
 body.light #mix.wide .fader .thumb{background:#fff;border-color:#999}
 body.light #mix.wide .pan{border-color:#c4c7cc}
 body.light .overlay{background:rgba(255,255,255,.85)}
@@ -745,9 +746,10 @@ function cardFillPos(sendId){
   return r ? ampToPos(r.vol) : 0;
 }
 function cardColour(sendId){
-  if (sendId === 0) return '#0099FF';
-  const s = state.sources[-sendId-1];
-  const c = (s && s.color) || '#0099FF';
+  // The master takes the mix's colour: the performer's, or the output's on Phones 1-4.
+  const m = sendId === 0 ? state.mixes.find(x=>x.id===state.mixId)
+                         : state.sources[-sendId-1];
+  const c = (m && m.color) || '#0099FF';
   return /^#[0-9a-fA-F]{6}$/.test(c) ? c : '#0099FF';
 }
 let meterLast = 0;
@@ -1202,7 +1204,11 @@ function updateCard(card, opts){
   fader.classList.toggle('muted', displayMute);
   card.classList.toggle('muted', displayMute);
 
-  if (!isMaster){
+  if (isMaster){
+    const mc = cardColour(0);
+    fill.style.background = 'linear-gradient('+(isWide()?'0deg':'90deg')+', color-mix(in srgb,'+mc+' 60%, black), '+mc+')';
+    card.querySelector('.name').style.setProperty('--mix', mc);
+  } else {
     fill.style.background = 'linear-gradient(90deg, color-mix(in srgb,'+col+' 60%, black), '+col+')';
     const pn = card.querySelector('.pan');
     const pt = card.querySelector('.pthumb');
