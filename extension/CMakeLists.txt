@@ -1240,7 +1240,7 @@ endif()
 # macOS and Windows. Linux is out: RME has no TotalMix for it (Frank 03.11.2026).
 # The version stands here, not under APPLE; tools/orc-release.sh and
 # tools/orc_manual.py read this line.
-set(MACOSX_BUNDLE_SHORT_VERSION_STRING 1.6.0)
+set(MACOSX_BUNDLE_SHORT_VERSION_STRING 1.6.1)
 if(APPLE OR WIN32)
     if(WIN32)
         set(ORC_HTTP_SOURCE src/win_http.cpp)
@@ -1417,7 +1417,7 @@ if(APPLE)
     set(MACOSX_BUNDLE_GUI_IDENTIFIER ch.stoersender.orc)
     # ORC starts at 1.0 (Frank 29.09.2026). The build number goes up with every
     # release, whatever the version string does.
-    set(MACOSX_BUNDLE_BUNDLE_VERSION 10)
+    set(MACOSX_BUNDLE_BUNDLE_VERSION 11)
     configure_file(orc/Info.plist.in "${CMAKE_BINARY_DIR}/OrcInfo.plist" @ONLY)
     set_target_properties(orc PROPERTIES
         OUTPUT_NAME ORC
