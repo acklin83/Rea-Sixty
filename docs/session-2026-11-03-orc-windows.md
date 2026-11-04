@@ -28,3 +28,13 @@ Nicht gelaufen, geht nur mit Frank am Gerät: Taskleiste, Fenster, UF1 und UF8, 
 
 ## CI, Nachtrag
 `test_orc_phones_server` hing am Zufall: eine offene Runde verwirft, was für einen eben geschriebenen Knoten zurückkommt, und der Test bestand nur, weil die Nachfrage 100 ms nach dem Schreiben fiel. Mit 300 ms Verschiebung 3 von 3 rot, seit `7c8f4aff` wartet der Test auf die nächste Abfrage. Dieselbe Logik liegt auf `main`, dort ist der Test noch nicht korrigiert, der Merge bringt ihn mit.
+
+## Nachtrag 04.11.: Franks Test am StoerPC, Release
+
+Getestet von Frank: Installer, UF8, Übergabe an REAPER und zurück, MoreMe mit offline laufendem TotalMix. Die UFX+ war nicht am PC; Frank: kein Known Issue, offline zeigt dasselbe.
+
+Zwei Fehler aus dem Test, beide behoben:
+- **MoreMe ohne Kanäle.** Mit allen Kanälen im Layout dauert eine Runde 2 s, die Submix-Punkte kommen ab 630 ms (am StoerPC gemessen, 60 Eingänge, 47 Playbacks, 47 Ausgänge, 1 MB). Das feste 400-ms-Fenster sah keinen. Eine Runde endet jetzt 400 ms nach ihrer letzten Nachricht, die nächste beginnt danach (`d0b405e7`). Eine zweite Abfrage startet die Runde bei TotalMix neu, zwei Remotes laufen unabhängig (gemessen). Warum der alte Build alle 10 s kurz Kanäle zeigte, ist nicht geklärt.
+- **Flächen 15 s bis oben.** `Sleep(2)` dauert 15.5 ms, mit `timeBeginPeriod(1)` 2.4 ms (gemessen). ORC fordert den Timer an, und weil Windows 11 das bei Prozessen ohne sichtbares Fenster ignorieren darf, auch `SetProcessInformation` (`b996f1b2`). In REAPER war es laut Frank nicht langsam, die DLL bleibt.
+
+SignPath hat abgelehnt, ORC und Rea-Sixty bleiben unter Windows unsigniert. Offen für v0.9.2: Übergabe erst nach geladenem Projekt.

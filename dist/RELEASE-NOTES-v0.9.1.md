@@ -1,4 +1,4 @@
-# Rea-Sixty v0.9.1, "@@CODENAME@@"
+# Rea-Sixty v0.9.1, "Fifteen Milliseconds of Fame"
 
 **ORC now runs on Windows, and Rea-Sixty works with it there.**
 
