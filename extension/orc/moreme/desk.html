@@ -167,6 +167,9 @@ let ws=null,S=null,curId=null,land=false,shownFrame=null,pendingDraw=false;
 let addWait=null,sorting=false;
 const P=()=>S&&S.book.performers.find(p=>p.id===curId)||null;
 const chan=id=>S.channels.find(c=>c.id===id);
+// A performer without a colour: what the phones show, Phones.cpp kPalette by position.
+const PALETTE=['#0099FF','#3fcf6a','#f0c000','#a000a0','#ff6b35','#00c2c2','#e0457b','#7a5cff'];
+const perfColour=p=>p.colour||PALETTE[Math.max(0,S.book.performers.indexOf(p))%8];
 const srcText=id=>{const[k,n]=id.split(':');return k==='group'?'Group':(k==='in'?'In ':'PB ')+n};
 const groupOfSrc=id=>id.startsWith('group:')?S.book.groups.find(g=>'group:'+g.id===id):null;
 
@@ -246,7 +249,7 @@ function drawList(){
   $('#list').innerHTML=S.book.performers.map(p=>{
     const o=S.outputs.find(x=>x.spec===p.output);
     const count=p.useLayout?'TotalMix':p.faders.length+' faders';
-    return '<div class="pf '+(p.id===curId?'on':'')+'" data-i="'+p.id+'"><span class="sw" style="background:'+esc(p.colour||'#888888')+'"></span><div><b>'+esc(p.name||'Unnamed')+'</b><small>'
+    return '<div class="pf '+(p.id===curId?'on':'')+'" data-i="'+p.id+'"><span class="sw" style="background:'+esc(perfColour(p))+'"></span><div><b>'+esc(p.name||'Unnamed')+'</b><small>'
       +esc((p.role?p.role+' · ':'')+(o?o.label:'No output'))+'</small><span class="st8"><span class="pill">'+count+'</span><span class="pill '+(p.chanEq?'op':'')+'">EQ '+lv[p.chanEq]+'</span><span class="pill '+(p.chanDyn?'op':'')+'">DYN '+lv[p.chanDyn]+'</span></span></div></div>';
   }).join('')||'<div class="empty">Without performers, the phones pick Phones 1-4.</div>';
   document.querySelectorAll('.pf').forEach(e=>e.onclick=()=>{curId=e.dataset.i;draw()});
@@ -256,7 +259,7 @@ function drawEdit(){
   $('#edit').style.display=p?'':'none';$('#right').style.display=p?'':'none';
   if(!p){$('#frame').removeAttribute('src');shownFrame=null;return}
   $('#name').value=p.name;$('#role').value=p.role;
-  $('#pcol').value=p.colour||'#888888';
+  $('#pcol').value=perfColour(p).toLowerCase();
   const known=S.outputs.some(o=>o.spec===p.output);
   $('#out').innerHTML='<option value="">No output</option>'+S.outputs.map(o=>'<option value="'+esc(o.spec)+'">'+esc(o.label)+'</option>').join('')
     +(p.output&&!known?'<option value="'+esc(p.output)+'">'+esc(p.output)+' (not visible)</option>':'');
