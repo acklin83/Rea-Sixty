@@ -696,6 +696,8 @@ static void testPageHasEverything(const std::string& res)
         "USB driver" }) {
         if (!has(page, word)) { std::printf("FAIL the page has no \"%s\"\n", word); ++g_fail; }
     }
+    // ⛔ It is MoreMe (Frank 04.11.2026).
+    EXPECT(page.find("Studio Control") == std::string::npos);
     EXPECT(page.find("confirm(") == std::string::npos);
     EXPECT(page.find("prompt(") == std::string::npos);
 }
