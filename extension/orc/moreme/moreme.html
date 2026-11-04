@@ -61,10 +61,13 @@ body{
 .fader .nick{position:absolute;top:50%;width:2px;height:14px;background:rgba(255,255,255,0.35);transform:translate(-50%,-50%);pointer-events:none}
 .fader.muted .fill{filter:grayscale(1) brightness(0.5)}
 /* A CHANNEL GROUP: one full fader, its members thinner below it when opened. */
-.gtoggle{background:none;border:none;color:var(--fg2);font-size:15px;line-height:1;padding:4px 8px 4px 0;cursor:pointer;flex:none;transition:transform .12s}
-.card.group.open .gtoggle{transform:rotate(90deg)}
+/* Drawn, not a text arrow: that one was too small and too pale to find (Frank 04.11.2026). */
+.gtoggle{background:none;border:none;padding:0;width:20px;height:28px;display:flex;align-items:center;justify-content:flex-start;cursor:pointer;flex:none;touch-action:manipulation}
+.gtoggle::before{content:'';width:0;height:0;border-style:solid;border-width:7px 0 7px 11px;border-color:transparent transparent transparent var(--fg);transition:transform .12s}
+.card.group.open .gtoggle::before{transform:rotate(90deg)}
 .card.thin{margin-left:16px;padding:6px 12px 7px;margin-bottom:6px}
-.card.thin.closed{display:none}
+/* ⛔ Under the id: #mix.wide .card sets display and won't give way to a class alone. */
+#mix .card.thin.closed{display:none}
 .card.thin .row1{margin-bottom:3px;min-height:0}
 .card.thin .name,.card.thin .db{font-size:13px}
 .card.thin .name{font-weight:600}
@@ -77,22 +80,28 @@ body{
 .card.thin .pan .pthumb{width:14px;height:14px}
 .card.thin .btn{width:32px;height:26px;border-radius:8px;font-size:13px}
 /* Strips: thinner, and the same 0 dB height as their neighbours. */
-.card.thin .tick{display:none}
+#mix .card.thin .tick{display:none}
 #mix.wide .card.thin{flex:0 0 70px;margin-left:0;padding:12px 4px 10px;margin-bottom:0}
 #mix.wide .card.thin .row1{min-height:42px;justify-content:flex-start}
 #mix.wide .card.thin .fader{width:40px;height:auto;border-radius:0;margin:8px auto}
 #mix.wide .card.thin .fader .thumb{width:36px;height:18px;border-radius:4px}
 #mix.wide .card.thin .btn{width:100%;height:30px}
-#mix.wide .gtoggle{position:absolute;top:6px;left:6px;padding:4px;z-index:2}
+#mix.wide .gtoggle{position:absolute;top:0;left:0;width:30px;height:44px;padding-left:3px;z-index:2}
+#mix.wide .card.group .name{padding-left:8px}
 @media (max-height:500px){
+  #mix.wide .gtoggle{height:36px}
   #mix.wide .card.thin{flex:0 0 92px;padding:5px}
   #mix.wide .card.thin .row1{min-height:0}
-  #mix.wide .card.thin .fader{margin:9px 0}
+  #mix.wide .card.thin .fader{width:26px;margin:9px 0}
+  #mix.wide .card.thin .fader .thumb{width:26px;height:16px}
 }
-.card.muted{padding:6px 14px}
-.card.muted .row1{margin-bottom:0;min-height:46px;align-items:center;padding-right:54px}
-.card.muted .fader,.card.muted .pan,.card.muted .btn.solo,.card.muted .db{display:none}
-.card.muted .ctrl{position:absolute;right:14px;top:50%;transform:translateY(-50%);margin-top:0}
+/* A muted card folds to one line in the list only. ⛔ A strip stays as it is: mute
+   must not move a fader, and undoing these rules strip by strip missed the thin ones. */
+#mix:not(.wide) .card.muted{padding:6px 14px}
+#mix:not(.wide) .card.muted .row1{margin-bottom:0;min-height:46px;align-items:center;padding-right:54px}
+#mix:not(.wide) .card.muted .fader,#mix:not(.wide) .card.muted .pan,#mix:not(.wide) .card.muted .btn.solo,#mix:not(.wide) .card.muted .db,
+#mix:not(.wide) .card.muted .keys,#mix:not(.wide) .card.muted .fxb,#mix:not(.wide) .card.muted .meter{display:none}
+#mix:not(.wide) .card.muted .ctrl{position:absolute;right:14px;top:50%;transform:translateY(-50%);margin-top:0}
 .card.muted .name{color:var(--fg2)}
 
 /* METERS (Frank 30.10.2026): the level TotalMix reports, under the fader in the
@@ -209,14 +218,6 @@ body{
 #mix.wide .pan .pthumb{left:50%;bottom:50%;top:auto;width:3px;height:15px;margin-left:-1.5px;border-radius:2px;background:var(--fg);transform-origin:50% 100%;transform:rotate(0deg)}
 #mix.wide .pan.active .pthumb{background:var(--accent)}
 
-#mix.wide .card.muted{padding:12px 8px 10px}
-#mix.wide .card.muted .row1{flex-direction:column;align-items:center;margin-bottom:4px;min-height:0;padding-right:0}
-#mix.wide .card.muted .fader{display:block}
-#mix.wide .card.muted .pan{display:block}
-#mix.wide .card.muted .db{display:block}
-#mix.wide .card.muted .btn.solo{display:block}
-#mix.wide .card.muted .ctrl{position:static;transform:none;margin-top:6px;flex-direction:column}
-
 /* STICKY MASTER */
 #mix.sticky-master .card.master{position:sticky;top:0;z-index:5;box-shadow:0 6px 14px rgba(0,0,0,0.5)}
 /* Fixed on the right on the strips (Frank 03.11.2026), at the end of the row. */
@@ -245,7 +246,7 @@ body{
 .tick{display:none;position:absolute;left:-20px;width:18px;text-align:right;font-size:10px;line-height:10px;margin-bottom:-5px;color:var(--fg3);pointer-events:none}
 #mix.wide .tick{display:block}
 #mix.wide .keys{flex-direction:column;gap:4px}
-.card.nomaster{display:none}
+#mix .card.nomaster{display:none}
 /* ⇨ A PHONE ON ITS SIDE (Frank 03.11.2026, iPhone in Safari: about 190 px for a
    card). Stacked, the fader had nothing left and ran over the name. So: name and
    value on top, the fader over the full height on the left, the keys beside it. */
@@ -255,33 +256,33 @@ body{
   .brand{font-size:16px}
   .moon,.gear{font-size:18px;padding:2px 6px}
   #mix.wide{padding:2px 8px 2px;gap:6px}
-  #mix.wide .card,#mix.wide .card.muted{
+  #mix.wide .card{
     flex:0 0 110px;min-height:0;padding:5px 5px;gap:3px 4px;align-items:stretch;
     display:grid;grid-template-columns:minmax(0,1fr) 42px;
     grid-template-rows:auto repeat(6,min-content) 1fr;
   }
-  #mix.wide .card .row1,#mix.wide .card.muted .row1{grid-column:1 / -1;grid-row:1;margin:0;padding:0;gap:0}
+  #mix.wide .card .row1{grid-column:1 / -1;grid-row:1;margin:0;padding:0;gap:0}
   #mix.wide .card .name{font-size:12px;line-height:14px;width:100%}
   #mix.wide .card.master .name{font-size:11px;letter-spacing:0}
   #mix.wide .card .db{font-size:11px;line-height:13px}
-  #mix.wide .fader,#mix.wide .card.muted .fader{grid-column:1;grid-row:2 / -1;width:26px;min-height:0;height:auto;margin:9px 0 9px 17px}
+  #mix.wide .fader{grid-column:1;grid-row:2 / -1;width:26px;min-height:0;height:auto;margin:9px 0 9px 17px}
   #mix.wide .meter.v{left:calc(100% + 1px);gap:1px}
   #mix.wide .fader .thumb{width:26px;height:16px}
   #mix.wide .fader .thumb::after{left:5px;right:5px}
   .tick{left:-18px;width:15px;font-size:9px}
   #mix.wide .tick.more{display:none}
-  #mix.wide .keys,#mix.wide .ctrl,#mix.wide .card.muted .ctrl{display:contents}
+  #mix.wide .keys,#mix.wide .ctrl{display:contents}
   #mix.wide .keys button,#mix.wide .ctrl>*{grid-column:2}
   /* FX send over the whole card: beside the fader it was too short to work. Its row
      is there on every strip, or the faders wouldn't line up. */
-  #mix.wide.has-fx .card,#mix.wide.has-fx .card.muted{grid-template-rows:auto 24px repeat(5,min-content) 1fr}
+  #mix.wide.has-fx .card{grid-template-rows:auto 24px repeat(5,min-content) 1fr}
   #mix.wide .fxb{grid-column:1 / -1;grid-row:2;height:24px;margin:0}
-  #mix.wide.has-fx .fader,#mix.wide.has-fx .card.muted .fader{grid-row:3 / -1}
+  #mix.wide.has-fx .fader{grid-row:3 / -1}
   #mix.wide .keys button{padding:0;height:20px;font-size:10px;border-radius:5px}
   #mix.wide .fxb span{line-height:24px;font-size:10px;right:6px}
-  #mix.wide .pan,#mix.wide .card.muted .pan{width:22px;height:22px;margin:0 auto}
+  #mix.wide .pan{width:22px;height:22px;margin:0 auto}
   #mix.wide .pan .pthumb{height:8px;width:2px;margin-left:-1px}
-  #mix.wide .btn,#mix.wide .card.muted .btn.solo{width:100%;height:22px;font-size:12px;border-radius:5px}
+  #mix.wide .btn{width:100%;height:22px;font-size:12px;border-radius:5px}
 }
 
 /* MY FADERS, in the settings */
@@ -1157,6 +1158,9 @@ function renderMix(){
 // a strip without (Frank 03.11.2026). On a phone on its side the keys sit beside
 // the fader and this has nothing to do.
 const sideMq = window.matchMedia('(max-height: 500px)');
+// ⛔ Turning back upright: on the resize this still says "on its side", alignFaders
+// gives up, and no further resize comes to run it again.
+sideMq.addEventListener('change', alignFaders);
 function alignFaders(){
   const root = $('mix');
   const all = [...root.querySelectorAll('.fader')];
@@ -1199,7 +1203,7 @@ function buildCard(opts){
   card.dataset.send = sendId;
   card.innerHTML =
     '<div class="row1">'+
-      (isGroup ? '<button class="gtoggle" aria-label="Open group">&#9656;</button>' : '')+
+      (isGroup ? '<button class="gtoggle" aria-label="Open group"></button>' : '')+
       '<div class="name"></div>'+
       '<div class="db"></div>'+
     '</div>'+
