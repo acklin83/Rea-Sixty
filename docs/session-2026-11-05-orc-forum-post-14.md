@@ -15,8 +15,8 @@ Auslöser: Frank wollte die Punkte einzeln freigeben, Plan im Chat, jeder Punkt 
 - 3a Layouts: Frank bestätigt 8 Slots, ORC bleibt bei acht.
 - Schalter „LAYER = Reihen".
 
-## Wartet auf `OSCProtocoll_260721.ods` (Frank liefert)
-Liegt nicht mehr auf dem Mac Studio. Davon hängen ab: ALL/SUB als Tasten, Names-Knopf (folgt `/name` ihm?), gespiegelte Ausgänge (`Mirror To NN` in der Gerätedatei, Format unbekannt, bei Frank alles 0). Dazu „hidden channels may be received by option": gibt es die Option, stimmt der neue Handbuchsatz zu ALL evtl. nicht mehr.
+## OSC-Tabelle (rme-audio.de/downloads/globalosc_protocol_b2.zip, Stand 21.07.26)
+Keine Adresse für ALL/SUB, Names-Knopf und gespiegelte Ausgänge. ALL/SUB und Mirror werden damit nicht gebaut, Umschalten der Namen vom UF8 geht nicht. `/color` 0 = versteckt, `visibleChannels` filtert das, also zeigt ORC versteckte Kanäle auch mit der Option „hidden channels may be received" nicht. Der Handbuchsatz zu ALL bleibt damit richtig.
 
 ## Geprüft
 Alle 47 ctests, `check_builtin_docs.py`, `orc_manual.py --check`. Neue Tests: PAN (`test_uf8_rme`), SEL (`test_uf8_rme`, `test_rme_input`), Layout-Runde end to end gegen falsches TotalMix (`test_rme_osc`), Builtins (`test_orc_settings`).
