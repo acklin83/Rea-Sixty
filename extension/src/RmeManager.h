@@ -256,6 +256,9 @@ class Manager {
     std::atomic<bool>          cfgDirty_{false};
     std::atomic<bool>          refreshReq_{false};
     std::atomic<int>           roundsMs_{0};
+    // Rounds left in which one miss is enough, after a layout loaded from here.
+    static constexpr int       kLayoutRounds = 2;
+    std::atomic<int>           layoutRounds_{0};
     std::set<std::string>      writtenSinceAsk_;   // under mx_, only while rounds run
     Visible                    visible_;   // under mx_
 };

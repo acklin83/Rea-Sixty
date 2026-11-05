@@ -275,7 +275,7 @@ void Surface::start()
         rme::setOscTrace(true);   // the mixer's side too: rme_osc_trace.log
     }
 
-    if (!uf8_) uf8_ = std::make_unique<Uf8Surface>(in_, uf8ScBank_, sleep_, settingsRequest_);
+    if (!uf8_) uf8_ = std::make_unique<Uf8Surface>(in_, uf8ScBank_, sleep_, settingsRequest_, settingsShown_);
 
     quit_.store(false);
     th_    = std::thread([this] { loop_(); });
@@ -346,7 +346,7 @@ void Surface::loop_()
     //              rule Rea-Sixty's side-car asks too), in the colours set in
     //              ORC, active when the action is on. A REAPER action from the
     //              inherited factory layer does nothing here, so dark.
-    //   360        opens the settings window (onEvent_), dim.
+    //   360        opens the settings window (onEvent_), lit while it shows, else dim.
     //   CYCLE, CLICK  nothing in ORC for now, dark.
     std::array<int, 9> ptCache{};
     auto ptNav = std::chrono::steady_clock::time_point{};
@@ -366,7 +366,10 @@ void Surface::loop_()
             l.btn = key;
             l.lamp = rmef::Lamp::Dark;
             if (key == ::uf1::btn::kCycle || key == ::uf1::btn::kClick) continue;
-            if (key == ::uf1::btn::k360) { l.lamp = rmef::Lamp::Dim; continue; }
+            if (key == ::uf1::btn::k360) {
+                l.lamp = settingsShown_.load() ? rmef::Lamp::Lit : rmef::Lamp::Dim;
+                continue;
+            }
             const bnd::Binding bd = bnd::getBinding(layer, bnd::fromUf1DeviceId(key));
             if (key == ::uf1::btn::kShift) {
                 const bool bound = !bnd::slotIsEmpty(

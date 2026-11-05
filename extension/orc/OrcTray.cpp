@@ -237,6 +237,7 @@ LRESULT CALLBACK trayProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 if (g_interrupted && g_interrupted()) ::PostQuitMessage(0);
                 // 360 on the UF1: opens the settings window and closes it again.
                 if (g_surface && g_surface->takeSettingsRequest()) webwindow::toggle();
+                if (g_surface) g_surface->setSettingsShown(webwindow::isShowing());
             }
             return 0;
         case WM_MEASUREITEM: {

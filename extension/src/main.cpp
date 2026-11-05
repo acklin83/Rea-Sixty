@@ -27843,7 +27843,8 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
             // the V-Pot pushes belong to its strips; Bank 8, Page 1, the nav
             // cross as on the UF1 (rows, submix, TotalMix' window), PLUG-IN
             // the channel view, whose pages are on the soft keys, SEND/PLUG-IN
-            // 1-6 the submix (Frank 29.10.: control room order). Every other
+            // 1-6 the submix (Frank 29.10.: control room order), PAN the V-Pots
+            // between gain and pan (Frank 05.11.). Every other
             // key (Layer, FINE, FLIP, V-POT / 1-5, 360 ...) stays a binding, so
             // Shift + Layer 1 leaves again.
             if (unit == 0 && tmOwnsStrip_(0)) {
@@ -27853,7 +27854,7 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 const bool mine = (id >= 0x20 && id <= 0x37) || (id >= 0x08 && id <= 0x0F)
                     || id == 0x78 || id == 0x79 || id == 0x52 || id == 0x53
                     || (id >= 0x7A && id <= 0x7E) || id == 0x50 || id == 0x76
-                    || (id >= 0x48 && id <= 0x4F)
+                    || (id >= 0x48 && id <= 0x4F) || id == 0x6E
                     || (chanView && id >= 0x18 && id <= 0x1F);
                 if (mine) {
                     if (pressed && !btnWoke) {
@@ -27891,6 +27892,7 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                             // A push on the CHANNEL encoder too, as on the UF1.
                             case 0x50: case 0x76:
                                 u8s::toggleChannelView(rst, g_rmeIn, g_uf8RmeSide); break;
+                            case 0x6E: u8s::togglePanOnPots(g_uf8RmeSide); break;
                             default: break;
                         }
                         tmSend_(w);
@@ -46154,6 +46156,21 @@ void pushUf8GlobalLeds()
                          || led == uf8::Uf8GlobalLed::Rec || led == uf8::Uf8GlobalLed::Auto
                          || led == uf8::Uf8GlobalLed::Pan)) {
                 sendUf8GlobalLedDirect_(led, uf8::GlobalLedState::Off);
+                continue;
+            }
+            // ⇨ PAN IN THE TOTALMIX SIDE-CAR is the side-car's own (the key press,
+            // above), on the left UF8. A right UF8 keeps the binding's lamp.
+            if (led == uf8::Uf8GlobalLed::Pan && tmOwnsStrip_(0)) {
+                const int units = uf8Units_();
+                {
+                    LedUnitScope scope(units > 1 ? 0 : -1);
+                    sendUf8GlobalLedDirect_(led, g_uf8RmeSide.panOnPots.load()
+                        ? uf8::GlobalLedState::Bright : uf8::GlobalLedState::Dim);
+                }
+                if (units > 1) {
+                    LedUnitScope scope(1);
+                    sendUf8GlobalLed(led, boundActionIsActive_(buttonIdForGlobalLed(led)));
+                }
                 continue;
             }
             const auto bid = buttonIdForGlobalLed(led);

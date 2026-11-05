@@ -264,7 +264,8 @@ address as a QR code to scan. A click on the address copies it. <em>MoreMe…</e
 <h2>Rows, channels and the submix</h2>
 <p>TotalMix has three rows of channels: inputs, playbacks and outputs. ORC adds a fourth,
 <strong>FX</strong>, below the outputs, with two channels: Reverb and Echo. The nav cross steps
-from row to row, top to bottom and round again.</p>
+from row to row, top to bottom and round again. A key can also go straight to a row, with the
+<a href="#actions">actions</a> for the four rows.</p>
 <p>A row on the UF1 shows the channels TotalMix shows, in TotalMix' order. Hide a channel in TotalMix,
 or load a layout without it, and ORC skips it a few seconds later. On the output row the control room comes first:
 Phones 1 to 4, Main B, Main, then the other outputs. A channel that carries a control-room role is
@@ -483,7 +484,7 @@ Controls that step through a list, such as an EQ type, still move one entry at a
 
 <div class="ctl" id="c-360" data-btn="k360">
 <h3>360</h3>
-<p>Opens the settings window. Press it again to close it.</p>
+<p>Opens the settings window. Press it again to close it. Lit while the window is open.</p>
 </div>
 
 <div class="ctl" id="c-idle" data-btn="kFlip kScrub kMode kTLeft kTRight kCycle kClick kT1 kT2">
@@ -777,7 +778,7 @@ them back at once.</p>
   <text class="lb" x="831" y="51">3</text>
   <text class="lb" x="887" y="51">4</text>
   <text class="lb" x="943" y="51">5</text>
-  <a href="#u-idle">
+  <a href="#u-pan">
   <rect class="k" x="806" y="70" width="78" height="18" rx="3"/>
   </a>
   <text class="lb" x="845" y="83">PAN</text>
@@ -877,7 +878,7 @@ position. The bottom line: X, Y and R, and <code>OFF</code> when the stand does 
 <div class="ctl" id="u-vpot" data-uf8="kVpotPush1">
 <h3>V-Pots</h3>
 <table class="data"><thead><tr><th>Mode, row</th><th>Turn</th><th>Push</th></tr></thead><tbody>
-<tr><td>TotalMix, input with a preamp</td><td>Gain</td><td>0 dB</td></tr>
+<tr><td>TotalMix, input with a preamp</td><td>Gain, with <a href="#u-pan">PAN</a> the pan in the current submix</td><td>0 dB, with PAN centre</td></tr>
 <tr><td>TotalMix, other inputs, playback</td><td>Pan in the current submix</td><td>Centre</td></tr>
 <tr><td>TotalMix, output</td><td>The output's own pan</td><td>Centre</td></tr>
 <tr><td>TotalMix, FX</td><td>Width, 0 (mono) to 1 (stereo)</td><td>Full stereo</td></tr>
@@ -888,6 +889,12 @@ position. The bottom line: X, Y and R, and <code>OFF</code> when the stand does 
 <tr><td>DynaMount</td><td>Rotation. The stand turns about a second after you stop.</td><td>Nothing</td></tr>
 </tbody></table>
 <p>In TotalMix, after a push the same V-Pot ignores turning for {{pushQuietMs}} ms, as on the UF1.</p>
+</div>
+
+<div class="ctl" id="u-pan" data-uf8="kPan">
+<h3>PAN</h3>
+<p>In TotalMix: the V-Pots of inputs with a preamp turn the pan in the current submix, press it again
+for the gain. Lit while on. In Hue and DynaMount it does nothing and stays dark.</p>
 </div>
 
 <div class="ctl" id="u-solocutsel" data-uf8="kStripKeys">
@@ -918,8 +925,11 @@ is nearest. The stand moves when you let go of the fader.</td></tr>
 <h3>SEND / PLUG-IN 1-8</h3>
 <p>In TotalMix: each key picks one output as the <a href="#rows">submix</a>, any output or control-room
 role, set on the page <a href="#set-uf8">UF8</a>. Out of the box TotalMix' control-room order: 1-4
-Phones 1-4, 5 Main B, 6 Main, 7 and 8 empty. The key of the submix in play is lit. A key whose output
-is empty, hidden or not assigned is dark and does nothing.</p>
+Phones 1-4, 5 Main B, 6 Main, 7 and 8 empty. The key of the submix in play is lit, and on the output
+row the SEL of that output. A key whose output is empty, hidden or not assigned is dark and does
+nothing.</p>
+<p>The list has what TotalMix shows in its Channel Layout. ALL in TotalMix shows hidden channels on the
+computer only: to assign an output, unhide it in every layout you use.</p>
 <p>FINE and a key <a href="#cue">cues</a> its output, the submix stays. The lamp turns yellow; the same
 press switches it off. In Hue and DynaMount the keys do nothing.</p>
 </div>
@@ -997,12 +1007,12 @@ every mode.</p>
 
 <div class="ctl" id="u-360" data-uf8="kBtn360">
 <h3>360</h3>
-<p>Opens the settings window. Press it again to close it.</p>
+<p>Opens the settings window. Press it again to close it. Lit while the window is open.</p>
 </div>
 
 <div class="ctl" id="u-idle">
 <h3>Keys ORC leaves alone</h3>
-<p>CHANNEL beside PLUG-IN, PAN and the six automation keys do nothing in ORC.</p>
+<p>CHANNEL beside PLUG-IN and the six automation keys do nothing in ORC.</p>
 </div>
 </div>
 

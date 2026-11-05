@@ -163,6 +163,8 @@ void installEditMenu()
     else                       [self present];
 }
 
+- (BOOL)isShowing { return self.window.isVisible; }
+
 - (void)pushLogin
 {
     const bool available = runningFromApplications();

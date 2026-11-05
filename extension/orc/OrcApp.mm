@@ -243,6 +243,7 @@ void runApp(Surface& surface, const std::function<bool()>& interrupted, const st
             // AppKit wants it.
             if (g_surface && g_surface->takeSettingsRequest())
                 [[OrcWebSettings shared] toggle];
+            if (g_surface) g_surface->setSettingsShown([[OrcWebSettings shared] isShowing]);
         }];
         [NSApp run];
         [watch invalidate];

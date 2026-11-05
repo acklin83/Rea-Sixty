@@ -279,7 +279,7 @@ bool noteRoundName(NameRound& round, const std::string& address)
     return true;
 }
 
-bool applyNameRound(State& st, const NameRound& round)
+bool applyNameRound(State& st, const NameRound& round, int rounds)
 {
     if (round.empty()) return false;
     bool changed = false;
@@ -287,7 +287,7 @@ bool applyNameRound(State& st, const NameRound& round)
         for (auto& [idx, ch] : m) {
             if (named.count(idx)) { ch.namedMisses = 0; continue; }
             if (!ch.seen) continue;
-            if (++ch.namedMisses >= kRoundsToForget) {
+            if (++ch.namedMisses >= rounds) {
                 ch.seen = false;
                 ch.namedMisses = 0;
                 changed = true;

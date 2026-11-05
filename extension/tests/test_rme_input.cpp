@@ -217,6 +217,7 @@ int main()
         in_::button(s, bare, st, c2, press(::uf1::btn::kNavRight), w);
         EXPECT(s.submix.load() == 0);      // TotalMix' order Phones 1 (6), Main (0)
         EXPECT(s.vpotBank.load() == 1);    // Main is on bank 2
+        EXPECT(s.sel[2].load() == 0);      // the output row's selection goes along
         in_::button(s, bare, st, c2, press(::uf1::btn::kNavRight), w);
         EXPECT(s.submix.load() == 6);
         EXPECT(s.vpotBank.load() == 0);    // Phones 1 is on bank 1

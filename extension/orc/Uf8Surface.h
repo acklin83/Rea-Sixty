@@ -46,9 +46,10 @@ class Uf8Surface {
   public:
     // `in` is the UF1's selection (one per program), `scBank` the side-car's
     // soft-key bank, `sleep` the one clock for both surfaces, `settings` the
-    // 360 request the app picks up.
+    // 360 request the app picks up, `settingsShown` whether its window is showing.
     Uf8Surface(reasixty::rme::input::State& in, std::atomic<int>& scBank,
-               surfsleep::Clock& sleep, std::atomic<bool>& settings);
+               surfsleep::Clock& sleep, std::atomic<bool>& settings,
+               const std::atomic<bool>& settingsShown);
     ~Uf8Surface();
 
     // One pass of the Surface's loop: retry the device every 2 s while it is
@@ -104,6 +105,7 @@ class Uf8Surface {
     std::atomic<int>&            scBank_;
     surfsleep::Clock&            sleep_;
     std::atomic<bool>&           settings_;
+    const std::atomic<bool>&     settingsShown_;
     surfsleep::WakeSwallow       wakeSwallow_;
 
     uf8::UF8Device               dev_;
@@ -124,7 +126,7 @@ class Uf8Surface {
     // the hand waits here.
     std::array<std::atomic<bool>, 8>         dynPending_{};
     std::array<std::atomic<double>, 8>       dynPendingNorm_{};
-    std::array<int, 24>                      cLed_{};
+    std::array<int, 26>                      cLed_{};
     std::array<std::int64_t, kUserKeyCount>  cUser_{};
     std::atomic<bool>                        repaint_{true};
     std::atomic<int>                         led_{4}, lcd_{4};   // Brightness.h steps

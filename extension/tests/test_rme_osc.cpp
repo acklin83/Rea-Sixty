@@ -1132,6 +1132,10 @@ int main()
         noteRoundName(all, "/output/3/name");
         applyNameRound(st, all);
         check(!applyNameRound(st, r) && st.outputs[3].seen, "a round in between starts the count over");
+        // After a layout loaded from here one round is enough.
+        ingest(st, Message{ "/output/3/name", { Arg::fromString("Phones") } });
+        applyNameRound(st, all);
+        check(applyNameRound(st, r, 1) && !st.outputs[3].seen, "one round when asked for one");
     }
 #if !defined(_WIN32)
     // The link end to end, against a fake TotalMix on a port from the system.
@@ -1208,6 +1212,17 @@ int main()
             check(mgr.snapshot().outputs[1].seen, "output 1 stays");
             showThree.store(true);
             check(waitFor(seenThree, 3000), "layout with it again: back");
+            // A layout loaded from here: one round decides, and it starts at once,
+            // so long before the next round would (forum 04.11.2026).
+            mgr.setRounds(60000);
+            std::this_thread::sleep_for(std::chrono::milliseconds(800));   // the round under way ends
+            showThree.store(false);
+            mgr.send("/layout/load/2", 1.0f);
+            check(waitFor([&] { return !seenThree(); }, 2000), "own layout load: gone after one round, at once");
+            check(mgr.snapshot().outputs[1].seen, "output 1 stays");
+            mgr.setRounds(700);
+            showThree.store(true);
+            check(waitFor(seenThree, 3000), "and back with the next one");
 
             // Writing: no round starts under a moving fader.
             const int before = asks.load();

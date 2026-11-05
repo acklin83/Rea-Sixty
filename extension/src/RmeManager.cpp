@@ -454,6 +454,14 @@ void Manager::send(const std::string& address, float value)
         ingest(state_, localEcho(address, value));
         // Our own link or unlink: ask again after the write (queue first).
         if (state_.stereoFlips != flips) refreshReq_.store(true);
+        // ⇨ A LAYOUT LOADED FROM HERE: ask at once, and a channel missing from the
+        // next rounds is gone after one (Frank 05.11.2026, forum: a layout that
+        // hides channels took 5 to 7 s on the surfaces, two rounds of 3 s). Two
+        // rounds get the shortcut, because the first can still catch the old layout.
+        if (roundsMs_.load() > 0 && address.rfind("/layout/load/", 0) == 0) {
+            layoutRounds_.store(kLayoutRounds);
+            refreshReq_.store(true);
+        }
     }
     rev_.fetch_add(1);
 }
@@ -709,7 +717,11 @@ void Manager::workerLoop()
                 visible_.in = collectIn;
                 visible_.pb = collectPb;
                 ++visible_.round;
-                if (!roundNames.empty()) applyNameRound(state_, roundNames);
+                if (!roundNames.empty()) {
+                    const bool afterLoad = layoutRounds_.load() > 0;
+                    applyNameRound(state_, roundNames, afterLoad ? 1 : kRoundsToForget);
+                    if (afterLoad) layoutRounds_.fetch_sub(1);
+                }
                 writtenSinceAsk_.clear();
             }
             rev_.fetch_add(1);

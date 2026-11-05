@@ -389,6 +389,11 @@ void toggle()
     else present("");
 }
 
+bool isShowing()
+{
+    return g_wnd && ::IsWindowVisible(g_wnd);
+}
+
 void closeForQuit()
 {
     if (!g_wnd) return;

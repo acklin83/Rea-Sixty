@@ -89,6 +89,23 @@ void registerBuiltins(input::State& in, const input::Host& host)
         [&in](int) { return input::faderMainActive(in, manager().snapshot()); },
         "RME: Main on the fader", false
     });
+    // ⇨ THE ROWS AS ACTIONS (Frank 05.11.2026): a key per row, for who wants to
+    // get to one without stepping. They choose, so the lamp says which row is up.
+    {
+        auto regRmeRow = [&in](const char* name, uf1::Row row, const char* label) {
+            registerBuiltin(name, DescBuilder{
+                [&in, row](bool firing, bool /*pressed*/, int /*param*/) {
+                    if (firing) in.row.store(static_cast<int>(row));
+                },
+                [&in, row](int) { return in.row.load() == static_cast<int>(row); },
+                label, false
+            });
+        };
+        regRmeRow("rme_row_input",    uf1::Row::Input,    "RME: Input row");
+        regRmeRow("rme_row_playback", uf1::Row::Playback, "RME: Playback row");
+        regRmeRow("rme_row_output",   uf1::Row::Output,   "RME: Output row");
+        regRmeRow("rme_row_fx",       uf1::Row::Fx,       "RME: FX row");
+    }
     // The "Ask TotalMix again" button of ORC's TotalMix page, as a key (forum
     // 2026-10-12: a TotalMix that came up slowly left faders and switches dead
     // until someone asked). The link asks twice more by itself after it comes

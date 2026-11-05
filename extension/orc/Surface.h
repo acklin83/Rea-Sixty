@@ -64,6 +64,9 @@ class Surface {
     // 360 was pressed: the app opens the settings window on its main thread.
     // Set on the device thread, taken (and cleared) by the app's timer.
     bool takeSettingsRequest() { return settingsRequest_.exchange(false); }
+    // Whether that window is showing: the app's timer writes it, the 360 lamps
+    // on both surfaces read it.
+    void setSettingsShown(bool on) { settingsShown_.store(on); }
 
   private:
     void loop_();
@@ -76,6 +79,7 @@ class Surface {
     Status             st_;
     std::atomic<bool>  quit_{false};
     std::atomic<bool>  settingsRequest_{false};
+    std::atomic<bool>  settingsShown_{false};
     std::thread        th_;
     std::thread        pacer_;
     ::uf1::UF1Device   dev_;

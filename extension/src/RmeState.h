@@ -228,6 +228,8 @@ struct NameRound {
 // Note `address` if it is a strip's name. True when it was.
 bool noteRoundName(NameRound& round, const std::string& address);
 // True when a channel went. An empty round says nothing and changes nothing.
-bool applyNameRound(State& st, const NameRound& round);
+// `rounds`: how many in a row it takes. One right after a layout loaded from
+// here (Manager::send): we know the strips are about to change.
+bool applyNameRound(State& st, const NameRound& round, int rounds = kRoundsToForget);
 
 }  // namespace reasixty::rme

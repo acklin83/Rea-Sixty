@@ -718,6 +718,15 @@ int main()
     static rme::input::State in;
     static const rme::input::Host host{};
     rme::registerBuiltins(in, host);
+    // The rows as actions: in the picker's RME group, and the lamp says which row.
+    for (const char* n : { "rme_row_input", "rme_row_playback", "rme_row_output", "rme_row_fx" })
+        EXPECT(std::string(bnd::builtinCategory(n)) == "RME");
+    EXPECT(bnd::invokeBuiltin("rme_row_fx", 0));
+    EXPECT(in.row.load() == 3);
+    EXPECT(bnd::builtinStateOf("rme_row_fx", 0));
+    EXPECT(!bnd::builtinStateOf("rme_row_output", 0));
+    EXPECT(bnd::invokeBuiltin("rme_row_output", 0));
+    EXPECT(in.row.load() == 2);
     bnd::registerBuiltin("sleep_now", bnd::BuiltinDescriptor{
         [](bool, bool, int) {}, [](int) { return false; }, "Sleep the surface now", false });
     bnd::setBuiltinKind("sleep_now", bnd::BuiltinKind::Switch);

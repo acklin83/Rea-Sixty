@@ -9234,6 +9234,14 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "rme_fader_main",
       "Puts TotalMix' Main output on the UF1 fader in the RME side-car. The "
       "lamp is lit while Main is on the fader." },
+    { "rme_row_input",
+      "Puts TotalMix' input row on the surfaces. The lamp is lit while it is there." },
+    { "rme_row_playback",
+      "Puts TotalMix' playback row on the surfaces. The lamp is lit while it is there." },
+    { "rme_row_output",
+      "Puts TotalMix' output row on the surfaces. The lamp is lit while it is there." },
+    { "rme_row_fx",
+      "Puts reverb and echo on the surfaces. The lamp is lit while they are there." },
     { "rme_ask_again",
       "Asks TotalMix for its whole state again, as the button Ask TotalMix "
       "again on ORC's General page does. For when faders or switches do not "
@@ -10010,6 +10018,10 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "rme_durec_next", "DuRec Next" },
     { "rme_durec_previous", "DuRec Prev" },
     { "rme_fader_main", "Main" },
+    { "rme_row_input", "Inputs" },
+    { "rme_row_playback", "Playback" },
+    { "rme_row_output", "Outputs" },
+    { "rme_row_fx", "FX" },
     { "rme_ask_again", "Ask TMix" },
     { "rme_show_window", "TotalMix" },
     { "obs_record_toggle", "OBS Rec" },

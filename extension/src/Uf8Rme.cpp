@@ -97,10 +97,11 @@ Pages pagesOf(const State& st, rmeu::Row r, int ch, const Config& cfg, int wantI
     return p;
 }
 
-// The overview's pot on an Input strip: the preamp gain, where the channel has one.
-const rmes::Param* gainParam(const State& st, rmeu::Row r, int ch)
+// The overview's pot on an Input strip: the preamp gain, where the channel has
+// one, unless PAN put the pan on the pots. Painter, turn and push all ask here.
+const rmes::Param* gainParam(const State& st, const Side& u, rmeu::Row r, int ch)
 {
-    if (r != rmeu::Row::Input || ch < 0) return nullptr;
+    if (r != rmeu::Row::Input || ch < 0 || u.panOnPots.load()) return nullptr;
     const rmes::Param* p = rmes::find("gain");
     return (p && rmes::available(st, r, ch, *p)) ? p : nullptr;
 }
@@ -311,7 +312,7 @@ Frame frame(const State& st, const rmei::State& in, const Side& u, const Config&
         // The pot and the value line.
         if (cv) {
             cvPot(v, s);
-        } else if (const rmes::Param* g = gainParam(st, rs, ch)) {
+        } else if (const rmes::Param* g = gainParam(st, u, rs, ch)) {
             double val = 0.0;
             const bool k = rmes::value(st, rs, ch, *g, val);
             v.valueLine = uf8ValueLine(utf8ToLatin1(rmes::label(st, rs, ch, *g)),
@@ -388,7 +389,7 @@ Writes vpot(const State& st, const rmei::State& in, Side& u, const Config& cfg,
     if (ch < 0) return out;
     keepMain(u, t);
     const auto rs = t.r;
-    if (const rmes::Param* g = gainParam(st, rs, ch)) {
+    if (const rmes::Param* g = gainParam(st, u, rs, ch)) {
         if (rmes::stepsWhole(*g)) return rmes::nudge(st, rs, ch, *g, wholeSteps(u.potAccum[strip], delta));
         return rmes::nudge(st, rs, ch, *g, delta, scale);
     }
@@ -426,7 +427,7 @@ Writes vpotPush(const State& st, const rmei::State& in, Side& u, const Config& c
     if (ch < 0) return out;
     keepMain(u, t);
     const auto rs = t.r;
-    if (const rmes::Param* g = gainParam(st, rs, ch)) return rmes::resetWrites(st, rs, ch, *g);
+    if (const rmes::Param* g = gainParam(st, u, rs, ch)) return rmes::resetWrites(st, rs, ch, *g);
     const int sub = rmeu::effectiveSubmix(st, in.submix.load());
     const std::string a = rmeu::panAddress(rs, ch, sub);
     if (!a.empty()) out.push_back({ a, rmeu::panIsWidth(rs) ? 1.0f : 0.0f });
@@ -475,6 +476,11 @@ Writes solo(const State& st, const rmei::State& in, const Side& u, int strip)
     if (a.empty()) return out;
     out.push_back({ a, rmeu::soloed(st, r, ch, sub) ? 0.0f : 1.0f });
     return out;
+}
+
+void togglePanOnPots(Side& u)
+{
+    u.panOnPots.store(!u.panOnPots.load());
 }
 
 void toggleChannelView(const State& st, const rmei::State& in, Side& u)

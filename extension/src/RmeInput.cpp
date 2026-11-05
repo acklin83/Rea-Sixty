@@ -134,7 +134,8 @@ void followBank(State& s, const rme::State& st, const Config& cfg, rmeu::Row r, 
 
 // The submix one place on, through the visible outputs, with wrap (Frank
 // 23.09., nav left/right). The submix is the output inputs and playbacks write
-// into; the row and the selection stay where they are.
+// into; the row stays where it is, the output row's selection goes along
+// (setSubmix).
 void stepSubmix(State& s, const rme::State& st, const Config& cfg, int dir)
 {
     const auto outs = rmeu::visibleChannels(st, rmeu::Row::Output);
@@ -150,6 +151,11 @@ void stepSubmix(State& s, const rme::State& st, const Config& cfg, int dir)
 void setSubmix(State& s, const rme::State& st, const Config& cfg, int out)
 {
     if (out < 0) return;
+    // ⇨ THE SUBMIX IS THE OUTPUT ROW'S SELECTION (Frank 05.11.2026, forum thread,
+    // post 14): with only the submix written, the output row's SEL stayed on the
+    // old output while the SEND/PLUG-IN key lit the new one. Two marks for one
+    // choice, the fault the V-Pot push had until 22.09. The row stays where it is.
+    s.sel[static_cast<int>(rmeu::Row::Output)].store(out);
     s.submix.store(out);
     followBank(s, st, cfg, rmeu::Row::Output, out);
 }
@@ -353,12 +359,11 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
             // ⇨ WITH AN OUTPUT ON THE FADER THE FADER GOES ALONG (Frank 22.09.,
             // point 7): otherwise the fader showed output A while the submix
             // was B, two selections with two marks (* and >). Now there is one,
-            // the submix, and it carries the white line.
+            // the submix, and it carries the white line. From another row the
+            // fader stays, and the output row's selection goes along (setSubmix).
             if (t.row == rmeu::Row::Output) {
-                if (s.row.load() == static_cast<int>(rmeu::Row::Output))
-                    select(s, t.row, t.ch);
-                else
-                    s.submix.store(t.ch);
+                s.sel[static_cast<int>(rmeu::Row::Output)].store(t.ch);
+                s.submix.store(t.ch);
             }
         } else if (slot.push == "select") {
             select(s, t.row, t.ch);

@@ -45,6 +45,7 @@ constexpr std::uint8_t kPageLeft   = 0x52;
 constexpr std::uint8_t kPageRight  = 0x53;
 constexpr std::uint8_t kFlip       = 0x54;
 constexpr std::uint8_t kVpotBank   = 0x68;   // V-POT, then 1-5 = 0x69..0x6D
+constexpr std::uint8_t kPan        = 0x6E;
 constexpr std::uint8_t kFine       = 0x6F;
 constexpr std::uint8_t kBankLeft   = 0x78;
 constexpr std::uint8_t kBankRight  = 0x79;
@@ -101,8 +102,9 @@ std::uint8_t barIndex(std::uint32_t rgb)
 } // namespace
 
 Uf8Surface::Uf8Surface(rmei::State& in, std::atomic<int>& scBank,
-                       surfsleep::Clock& sleep, std::atomic<bool>& settings)
-    : in_(in), scBank_(scBank), sleep_(sleep), settings_(settings)
+                       surfsleep::Clock& sleep, std::atomic<bool>& settings,
+                       const std::atomic<bool>& settingsShown)
+    : in_(in), scBank_(scBank), sleep_(sleep), settings_(settings), settingsShown_(settingsShown)
 {
     resetCache_();
     dev_.setRawInputHandler([this](const std::uint8_t* d, std::size_t n) { onRaw_(d, n); });
@@ -354,6 +356,9 @@ void Uf8Surface::paintLeds_()
         { G::Flip,     flip_.load() ? 2 : 1 },
         { G::Plugin,   side_.chanView.load() ? 2 : 1 },
         { G::Fine,     fineHeld_.load() ? 2 : 1 },
+        { G::Pan,      mode != 0 ? 0 : side_.panOnPots.load() ? 2 : 1 },
+        // 360: lit while the settings window it opens is showing.
+        { G::Btn360,   settingsShown_.load() ? 2 : 1 },
         { G::VPotBank, bankKeyLamp_(0) },
         { G::Soft1,    bankKeyLamp_(1) },
         { G::Soft2,    bankKeyLamp_(2) },
@@ -761,6 +766,7 @@ void Uf8Surface::onButton_(std::uint8_t id, bool pressed)
         // STRIP (Frank 29.10.2026).
         case kPlugin:
         case kChannelPush: u8s::toggleChannelView(st, in_, side_); break;
+        case kPan:         u8s::togglePanOnPots(side_); break;
         default: break;
     }
     send_(w);

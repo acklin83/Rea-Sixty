@@ -111,6 +111,9 @@ int main()
         EXPECT(u8::submixKeyLamp(st, in, cfg, 6) == 0 && u8::submixKeyLamp(st, in, cfg, 7) == 0);
         u8::pickSubmix(st, in, cfg, 5);
         EXPECT(in.submix.load() == 0);
+        // The output row's SEL goes along, the row stays (forum, post 14).
+        EXPECT(in_::selected(in, st, rmeu::Row::Output) == 0);
+        EXPECT(in.row.load() == static_cast<int>(rmeu::Row::Input));
         EXPECT(u8::frame(st, in, side, cfg, soft).strips[2].csType == "> Main");
         u8::pickSubmix(st, in, cfg, 1);                     // a dark key changes nothing
         EXPECT(in.submix.load() == 0);
@@ -228,6 +231,20 @@ int main()
         const auto c = u8::vpotPush(st, in, side, cfg, 1, 1000);
         EXPECT(c.size() == 1 && c[0].second == 0.0f);
         EXPECT(u8::vpot(st, in, side, cfg, 1, 3, 1.0, 1100).empty());
+    }
+    // ── PAN: the same pot on the preamp input, turned, pushed and shown as pan ──
+    {
+        u8::Side s2;
+        u8::togglePanOnPots(s2);
+        const auto p = u8::vpot(st, in, s2, cfg, 2, 5, 1.0, 0);
+        EXPECT(p.size() == 1 && p[0].first.find("balpan") != std::string::npos);
+        EXPECT(u8::frame(st, in, s2, cfg, soft).strips[2].valueLine.find("Pan") == 0);
+        const auto c = u8::vpotPush(st, in, s2, cfg, 2, 1000);
+        EXPECT(c.size() == 1 && c[0].first.find("balpan") != std::string::npos && c[0].second == 0.0f);
+        u8::togglePanOnPots(s2);
+        const auto g = u8::vpot(st, in, s2, cfg, 2, 1, 1.0, 5000);
+        EXPECT(!g.empty() && g[0].first.find("/input/2/gain") == 0);
+        EXPECT(u8::frame(st, in, s2, cfg, soft).strips[2].valueLine.find("Gain") == 0);
     }
     // ── CUT and SOLO ─────────────────────────────────────────────────────────
     {

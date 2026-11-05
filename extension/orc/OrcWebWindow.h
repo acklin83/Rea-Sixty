@@ -16,6 +16,8 @@
 - (void)presentPage:(NSString*)page;
 // 360 on the UF1: open the window, or close it when it is showing.
 - (void)toggle;
+// For the 360 lamps.
+- (BOOL)isShowing;
 @end
 #else
 #include <string>
@@ -26,6 +28,8 @@ namespace orc::webwindow {
 void present(const std::string& page);
 // 360 on the UF1: open the window, or close it when it is showing.
 void toggle();
+// For the 360 lamps.
+bool isShowing();
 // ORC is quitting: no handing over of the open field, no second look.
 void closeForQuit();
 

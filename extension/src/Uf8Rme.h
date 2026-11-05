@@ -62,6 +62,9 @@ struct Side {
     std::atomic<int>  chanPage{-1};      // rmes::View id, -1 = the first
     std::atomic<int>  chanPageGroup{0};  // which eight pages the soft keys show
     std::atomic<double> potAccum[kStrips] = {};
+    // ⇨ PAN (Frank 05.11.2026): the overview's V-Pots on an input with a preamp
+    // turn the pan in the submix instead of the gain. Lit while on.
+    std::atomic<bool> panOnPots{false};
     PushQuiet<kStrips> pushQuiet;
     // ⇨ MAIN ON STRIP 8 WHILE IT MOVES (Config::uf8ShowMainOnChange): the
     // CHANNEL encoder's target and until when it stands there, on a steady
@@ -127,6 +130,9 @@ Writes vpotPush(const State& st, const rmei::State& in, Side& u, const Config& c
 void   sel(const State& st, rmei::State& in, const Side& u, int strip);
 Writes cut(const State& st, const rmei::State& in, const Side& u, int strip);
 Writes solo(const State& st, const rmei::State& in, const Side& u, int strip);
+
+// PAN: the overview's V-Pots between gain and pan on inputs with a preamp.
+void togglePanOnPots(Side& u);
 
 // PLUG-IN: the channel view on or off (only with a selected channel).
 void toggleChannelView(const State& st, const rmei::State& in, Side& u);
