@@ -9,7 +9,7 @@ Auslöser: Frank wollte die Punkte einzeln freigeben, Plan im Chat, jeder Punkt 
 - **PAN** (`0x6E`): `Side::panOnPots`, `gainParam` fragt es für Anzeige, Drehen und Drücken. ORC und Rea-Sixty-Side-Car (linker UF8, rechter behält die Bindung).
 - **Layouts:** TotalMix hat 6 (Frank hat nachgesehen), `kLayoutSlots`. Tasten 7 und 8 einer Layout-Bank sind leer und senden nichts. Die Gerätedatei nennt 8 Namen, darum stand im Code 8.
 - **Link A/B:** Main und Main B leuchten gemeinsam, SEL, SEND/PLUG-IN und Submix-Bank (`rmeu::outputLitWith`). Nur Lampen. Ausgelöst von Franks Beobachtung, nicht vom Forum.
-- **V-Pot-Druck auf Gain:** 48V an/aus, wo der Kanal es meldet, sonst nichts (Frank). Pan-Mitte bleibt, die Kanalansicht bleibt beim Standardwert.
+- **V-Pot-Druck auf Gain:** 48V an/aus, wo der Kanal es meldet, sonst nichts (Frank). Pan-Mitte bleibt, die Kanalansicht bleibt beim Standardwert. Die Wertzeile zeigt „Gain 48V", solange es an ist.
 - **Builtins** `rme_row_input`, `_playback`, `_output`, `_fx`, mit Lampe. LAYER bleibt Modi.
 - **Handbuch ORC:** PAN, SEL, 360, Reihen-Actions, versteckte Ausgänge und ALL.
 
@@ -18,7 +18,7 @@ Auslöser: Frank wollte die Punkte einzeln freigeben, Plan im Chat, jeder Punkt 
 - Schalter „LAYER = Reihen".
 
 ## OSC-Tabelle (rme-audio.de/downloads/globalosc_protocol_b2.zip, Stand 21.07.26)
-Keine Adresse für ALL/SUB, Names-Knopf und gespiegelte Ausgänge. ALL/SUB und Mirror werden damit nicht gebaut, Umschalten der Namen vom UF8 geht nicht. `/color` 0 = versteckt, `visibleChannels` filtert das, also zeigt ORC versteckte Kanäle auch mit der Option „hidden channels may be received" nicht. Der Handbuchsatz zu ALL bleibt damit richtig.
+Keine Adresse für ALL/SUB, Names-Knopf und gespiegelte Ausgänge. ALL/SUB und Mirror werden damit nicht gebaut, Umschalten der Namen vom UF8 geht nicht. Eine Namenstabelle pro Gerät hat Frank abgelehnt. `/color` 0 = versteckt, `visibleChannels` filtert das, also zeigt ORC versteckte Kanäle auch mit der Option „hidden channels may be received" nicht. Der Handbuchsatz zu ALL bleibt damit richtig.
 
 ## Geprüft
 Alle 47 ctests, `check_builtin_docs.py`, `orc_manual.py --check`. Neue Tests: PAN (`test_uf8_rme`), SEL (`test_uf8_rme`, `test_rme_input`), Layout-Runde end to end gegen falsches TotalMix (`test_rme_osc`), Builtins (`test_orc_settings`).

@@ -237,10 +237,14 @@ int main()
         State s2 = st;
         u8::Side s3;
         EXPECT(u8::vpotPush(s2, in, s3, cfg, 2, 1000).empty());            // In 3: no 48V
+        EXPECT(u8::frame(s2, in, s3, cfg, soft).strips[2].valueLine.find("48V") == std::string::npos);
         s2.inputs[2].setLeaf("48v", 0.0);
         auto w = u8::vpotPush(s2, in, s3, cfg, 2, 2000);
         EXPECT(w.size() == 1 && w[0].first == "/input/2/48v" && w[0].second == 1.0f);
+        EXPECT(u8::frame(s2, in, s3, cfg, soft).strips[2].valueLine.find("48V") == std::string::npos);
         s2.inputs[2].setLeaf("48v", 1.0);
+        const std::string line = u8::frame(s2, in, s3, cfg, soft).strips[2].valueLine;
+        EXPECT(line.find("Gain 48V") == 0 && line.size() == 19);   // the value still fits
         w = u8::vpotPush(s2, in, s3, cfg, 2, 3000);
         EXPECT(w.size() == 1 && w[0].first == "/input/2/48v" && w[0].second == 0.0f);
     }

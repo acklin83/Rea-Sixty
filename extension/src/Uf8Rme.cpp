@@ -315,8 +315,14 @@ Frame frame(const State& st, const rmei::State& in, const Side& u, const Config&
         } else if (const rmes::Param* g = gainParam(st, u, rs, ch)) {
             double val = 0.0;
             const bool k = rmes::value(st, rs, ch, *g, val);
-            v.valueLine = uf8ValueLine(utf8ToLatin1(rmes::label(st, rs, ch, *g)),
-                                       k ? rmes::format(*g, rs, val) : std::string());
+            // ⇨ 48V IN THE LINE (Frank 05.11.2026): the V-Pot's push switches it,
+            // so the line says when it is on.
+            std::string name = utf8ToLatin1(rmes::label(st, rs, ch, *g));
+            double on = 0.0;
+            if (const rmes::Param* p48 = rmes::find("48v");
+                p48 && rmes::value(st, rs, ch, *p48, on) && on >= 0.5)
+                name += " 48V";
+            v.valueLine = uf8ValueLine(name, k ? rmes::format(*g, rs, val) : std::string());
             v.ring     = uf8::vpotPosUnipolar(k ? rmes::norm(*g, rs, val) : 0.0);
             v.ringMode = 0x01;
         } else {
