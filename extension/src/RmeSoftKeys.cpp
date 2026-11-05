@@ -186,7 +186,7 @@ static std::array<uf1spread::SkCell, 4> submixRow(int bank, int half, const inpu
         if (out < 0) continue;
         const std::string& own = (half == 0 && sp.label.empty()) ? bd.label : sp.label;
         c.label = own.empty() ? rmeu::displayName(st, rmeu::Row::Output, out) : own;
-        const int led = !online ? 0 : out == sub ? 2 : 1;
+        const int led = !online ? 0 : rmeu::outputLitWith(st, out, sub) ? 2 : 1;
         const KeyLamp lamp = dynKeyLamp(bd, half, led);
         c.on        = led >= 2;
         c.colBright = lamp.bright;

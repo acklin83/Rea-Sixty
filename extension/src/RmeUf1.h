@@ -113,6 +113,11 @@ Target resolveTarget(const State& st, const std::string& spec);
 // hidden output landed on Main without a word (effectiveSubmix).
 int keyOutput(const State& st, const std::string& spec);
 
+// ⇨ MAIN AND MAIN B WITH LINK A/B ON (Frank 05.11.2026): choosing one lights both,
+// SEL and the submix keys. Only the lamps: faders still write to the one submix.
+// True when `out` is `chosen`, or its partner while they are linked.
+bool outputLitWith(const State& st, int out, int chosen);
+
 // ⇨ CUE (Frank 03.11.2026). TotalMix cues one hardware output at a time and
 // reports it as /controlroom/cuechan, -1 for none; measured 03.11. on his TotalMix:
 // a write lands, -1 clears, and the remote that wrote gets no echo. A second cue

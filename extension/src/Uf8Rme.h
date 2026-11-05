@@ -121,8 +121,9 @@ Writes fader(const State& st, const rmei::State& in, const Side& u, int strip, d
 Writes vpot(const State& st, const rmei::State& in, Side& u, const Config& cfg,
             int strip, int delta, double scale, std::int64_t nowMs);
 
-// V-Pot pushed: back to the default (gain 0 dB, pan centre, width 1, a page's
-// parameter to its default), or a page switch toggled.
+// V-Pot pushed: on gain 48V on and off where the channel has it, otherwise back to
+// the default (pan centre, width 1, a page's parameter to its default), or a page
+// switch toggled.
 Writes vpotPush(const State& st, const rmei::State& in, Side& u, const Config& cfg,
                 int strip, std::int64_t nowMs);
 
@@ -158,7 +159,7 @@ PageLamps bankLamps(const State& st, const rmei::State& in, const Side& u);
 // cfg.uf8SubmixKeys (Frank 03.11.2026); the factory is the control room's order: 1-4
 // Phones 1-4, 5 Main B, 6 Main, 7-8 empty. A key without a visible output stays
 // dark rather than letting the others move up, as on the UF1's pots. The lamp: 2
-// the submix in play, 1 another output, 0 none.
+// the submix in play or its Link A/B partner, 1 another output, 0 none.
 int  submixKeyLamp(const State& st, const rmei::State& in, const Config& cfg, int key);
 void pickSubmix(const State& st, rmei::State& in, const Config& cfg, int key);
 // ⇨ SHIFT + THE KEY CUES ITS OUTPUT, the submix stays (Frank 03.11.2026). The

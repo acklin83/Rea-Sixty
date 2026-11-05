@@ -232,6 +232,41 @@ int main()
         EXPECT(c.size() == 1 && c[0].second == 0.0f);
         EXPECT(u8::vpot(st, in, side, cfg, 1, 3, 1.0, 1100).empty());
     }
+    // ── a push on gain: 48V where the channel has it, else nothing ───────────
+    {
+        State s2 = st;
+        u8::Side s3;
+        EXPECT(u8::vpotPush(s2, in, s3, cfg, 2, 1000).empty());            // In 3: no 48V
+        s2.inputs[2].setLeaf("48v", 0.0);
+        auto w = u8::vpotPush(s2, in, s3, cfg, 2, 2000);
+        EXPECT(w.size() == 1 && w[0].first == "/input/2/48v" && w[0].second == 1.0f);
+        s2.inputs[2].setLeaf("48v", 1.0);
+        w = u8::vpotPush(s2, in, s3, cfg, 2, 3000);
+        EXPECT(w.size() == 1 && w[0].first == "/input/2/48v" && w[0].second == 0.0f);
+    }
+    // ── Link A/B: both lamps, one submix ─────────────────────────────────────
+    {
+        State s2 = st;
+        in_::State i2;
+        i2.row.store(static_cast<int>(rmeu::Row::Output));
+        u8::Side s3;
+        Config c2 = cfg;
+        s2.mainOutB = 6;
+        in_::select(i2, rmeu::Row::Output, 0);                 // Main
+        const auto chs = u8::channels(s2, i2, s3);
+        const auto litOn = [&](const State& x, int ch) {
+            const auto f = u8::frame(x, i2, s3, c2, soft);
+            for (int k = 0; k < u8::kStrips; ++k)
+                if (chs[static_cast<size_t>(k)] == ch) return f.strips[static_cast<size_t>(k)].sel;
+            return false;
+        };
+        EXPECT(litOn(s2, 0) && !litOn(s2, 6));                 // not linked: one
+        EXPECT(u8::submixKeyLamp(s2, i2, c2, 5) == 2 && u8::submixKeyLamp(s2, i2, c2, 0) == 1);
+        s2.linkAB = true;
+        EXPECT(litOn(s2, 0) && litOn(s2, 6));                  // linked: both
+        EXPECT(u8::submixKeyLamp(s2, i2, c2, 5) == 2 && u8::submixKeyLamp(s2, i2, c2, 0) == 2);
+        EXPECT(i2.submix.load() == 0);                         // and one submix
+    }
     // ── PAN: the same pot on the preamp input, turned, pushed and shown as pan ──
     {
         u8::Side s2;

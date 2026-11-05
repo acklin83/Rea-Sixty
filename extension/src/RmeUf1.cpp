@@ -102,6 +102,15 @@ std::vector<int> visibleChannels(const State& st, Row r)
     return v;
 }
 
+bool outputLitWith(const State& st, int out, int chosen)
+{
+    if (out < 0 || chosen < 0) return false;
+    if (out == chosen) return true;
+    return st.linkAB && st.mainOut >= 0 && st.mainOutB >= 0
+        && ((out == st.mainOut && chosen == st.mainOutB)
+            || (out == st.mainOutB && chosen == st.mainOut));
+}
+
 std::string roleSpecOf(const State& st, int ch)
 {
     if (ch < 0) return {};

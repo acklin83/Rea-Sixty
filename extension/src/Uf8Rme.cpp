@@ -286,7 +286,7 @@ Frame frame(const State& st, const rmei::State& in, const Side& u, const Config&
 
         // Lamps: SEL = the channel the UF1 shows, CUT = mute, SOLO = solo in the
         // submix, on an output its cue.
-        v.sel  = !held && (ch == sel);
+        v.sel  = !held && (rs == rmeu::Row::Output ? rmeu::outputLitWith(st, ch, sel) : ch == sel);
         v.cut  = rmeu::muted(st, rs, ch);
         v.solo = rmeu::soloLampOn(st, rs, ch, sub);
 
@@ -427,7 +427,12 @@ Writes vpotPush(const State& st, const rmei::State& in, Side& u, const Config& c
     if (ch < 0) return out;
     keepMain(u, t);
     const auto rs = t.r;
-    if (const rmes::Param* g = gainParam(st, u, rs, ch)) return rmes::resetWrites(st, rs, ch, *g);
+    // ⇨ ON GAIN THE PUSH IS 48V, on and off (Frank 05.11.2026, until then 0 dB), and
+    // nothing on a channel TotalMix reports none for. Pan keeps its centre.
+    if (gainParam(st, u, rs, ch)) {
+        const rmes::Param* p = rmes::find("48v");
+        return p ? rmes::press(st, rs, ch, *p) : out;
+    }
     const int sub = rmeu::effectiveSubmix(st, in.submix.load());
     const std::string a = rmeu::panAddress(rs, ch, sub);
     if (!a.empty()) out.push_back({ a, rmeu::panIsWidth(rs) ? 1.0f : 0.0f });
@@ -573,7 +578,7 @@ int submixKeyLamp(const State& st, const rmei::State& in, const Config& cfg, int
 {
     const int out = submixKeyOutput(st, cfg, key);
     if (out < 0) return 0;
-    return out == rmeu::effectiveSubmix(st, in.submix.load()) ? 2 : 1;
+    return rmeu::outputLitWith(st, out, rmeu::effectiveSubmix(st, in.submix.load())) ? 2 : 1;
 }
 
 void pickSubmix(const State& st, rmei::State& in, const Config& cfg, int key)
