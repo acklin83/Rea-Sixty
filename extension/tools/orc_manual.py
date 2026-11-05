@@ -130,8 +130,8 @@ def gen_banks(d):
                        "keys 1 to 4 on the first half and 5 to 8 on the second.</li>")
             continue
         if b["kind"] == "layouts":
-            out.append(f"<li><strong>{e(name)}</strong>: TotalMix' eight layouts, "
-                       "keys 1 to 4 on the first half and 5 to 8 on the second.</li>")
+            out.append(f"<li><strong>{e(name)}</strong>: TotalMix' six layouts, "
+                       "keys 1 to 4 on the first half and 5 and 6 on the second.</li>")
             continue
         keys = [k for k in b["keys"] if k["action"] or k["label"]]
         if not keys:

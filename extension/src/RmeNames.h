@@ -1,6 +1,7 @@
 #pragma once
 //
-// RmeNames — the names of TotalMix' eight snapshots and eight layouts.
+// RmeNames — the names of TotalMix' snapshots and layouts. The file has eight of
+// each, TotalMix offers six layouts (kLayoutSlots in RmeState.h).
 //
 // ⛔ OSC DOES NOT CARRY THEM. /snapshot/load/<n> answers a state (0 / 2 / 3) and
 // /layout/load/<n> answers nothing at all. The names live only in TotalMix'

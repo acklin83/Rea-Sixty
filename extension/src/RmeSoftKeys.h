@@ -56,6 +56,7 @@ uf8::bindings::DynamicBankKind rmeKind(int bank);
 
 // One TotalMix snapshot or layout slot, 0..7. `led` 0 dark (no link), 1 dim,
 // 2 lit (the active snapshot, changed or not, and the last layout loaded).
+// Layout slots 6 and 7 are empty: TotalMix has six (kLayoutSlots).
 // ⛔ Reads TotalMix' names from disk (RmeNames): one thread per program.
 struct DynSlot {
     std::string label;
@@ -75,8 +76,8 @@ struct KeyLamp {
 };
 KeyLamp dynKeyLamp(const uf8::bindings::Binding& slot, int half, int led);
 
-// Load snapshot / layout `slot` (0..7). False when there is no link, and then
-// nothing is sent. Thread-safe (the manager has its own lock).
+// Load snapshot / layout `slot` (0..7). False when there is no link or no such
+// layout, and then nothing is sent. Thread-safe (the manager has its own lock).
 bool loadDyn(uf8::bindings::DynamicBankKind kind, int slot);
 
 // ⇨ A SUBMIX BANK'S KEY (DynamicBankKind::RmeSubmixes): item 0..7, its output a

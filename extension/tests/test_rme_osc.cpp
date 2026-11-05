@@ -197,6 +197,8 @@ int main()
     check(st.lastLayout == -1, "no layout until one is sent");
     feed("/layout/load/4", 1.0f);
     check(st.lastLayout == 3, "the layout last sent, 0-based");
+    feed("/layout/load/7", 1.0f);
+    check(st.lastLayout == 3, "TotalMix has six layouts");
 
     // ── colour index 0 means hidden, and it is an INDEX, not RGB ────────────
     feed("/input/0/color", 0.0f);

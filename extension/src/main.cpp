@@ -9192,7 +9192,7 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
     // lives in RmeSoftKeys since 25.09.2026, shared with ORC.
     if (kind == DK::RmeSnapshots || kind == DK::RmeLayouts) {
         const auto d = reasixty::rme::softkeys::dynSlot(kind, slot);
-        info.present = true;
+        info.present = !d.label.empty();   // layout keys 7 and 8: TotalMix has six
         info.label   = d.label;
         // White through the colour path: on the UF1 a key without a colour
         // knows only lit and dim, and "no link" has to be dark.

@@ -746,9 +746,9 @@ enum class DynamicBankKind : uint8_t {
     // the first eight — the surface has eight keys and OBS has no notion of a
     // page.
     ObsScenes    = 9,
-    // TotalMix' eight snapshots and eight layouts (Frank 2026-09-22). Like OBS,
-    // the list belongs to the other program: TotalMix has exactly eight of each,
-    // and the names come from its state file because OSC carries none
+    // TotalMix' eight snapshots and six layouts (Frank 2026-09-22, 2026-11-05). Like
+    // OBS, the list belongs to the other program, and the names come from its state
+    // file because OSC carries none
     // (RmeNames.h). A snapshot key lights while TotalMix reports that snapshot
     // active or changed (steady, Frank 22.09.); a layout key lights for the layout
     // last sent from here, because TotalMix answers nothing on /layout/load.

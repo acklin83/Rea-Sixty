@@ -253,6 +253,16 @@ int main()
               [&](bnd::DynamicBankKind, int slot) { loaded = slot; });
     EXPECT(loaded == 6);
 
+    // ── TotalMix has six layouts: keys 7 and 8 are empty and send nothing ────
+    {
+        using DK = bnd::DynamicBankKind;
+        EXPECT(!sk::dynSlot(DK::RmeLayouts, 5).label.empty());
+        EXPECT(sk::dynSlot(DK::RmeLayouts, 6).label.empty() && sk::dynSlot(DK::RmeLayouts, 6).led == 0);
+        EXPECT(sk::dynSlot(DK::RmeLayouts, 7).label.empty());
+        EXPECT(!sk::loadDyn(DK::RmeLayouts, 6));
+        EXPECT(!sk::dynSlot(DK::RmeSnapshots, 7).label.empty());
+    }
+
     // ── a TotalMix key's lamp: the key's own colours, white when it has none ──
     {
         bnd::Binding bd;                                    // fresh: white Bright / Dim

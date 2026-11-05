@@ -100,6 +100,11 @@ struct Channel {
 // A snapshot slot's state as TotalMix reports it back on /snapshot/load/<n>.
 enum class SnapshotState : std::uint8_t { Off = 0, Active = 2, Changed = 3 };
 
+// ⛔ TOTALMIX HAS 8 SNAPSHOTS AND 6 LAYOUTS (Frank 05.11.2026, looked in TotalMix).
+// Its state file names eight layouts all the same (RmeNames), so the file is no
+// evidence of how many there are.
+constexpr int kLayoutSlots = 6;
+
 struct State {
     // ── control room, all of it a cache ──────────────────────────────────────
     int    mainOut      = -1;
@@ -122,7 +127,7 @@ struct State {
     bool   globalSolo   = false;
 
     SnapshotState snapshot[8] = {};
-    // The layout last sent from here, 0..7, -1 = none yet. Ours, not TotalMix':
+    // The layout last sent from here, 0..5, -1 = none yet. Ours, not TotalMix':
     // /layout/load has no answer (RmeState.cpp).
     int           lastLayout  = -1;
 

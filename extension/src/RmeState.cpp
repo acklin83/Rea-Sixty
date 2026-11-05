@@ -139,7 +139,7 @@ bool ingest(State& st, const Message& m)
     // one we hold is the one last sent from here (Manager::send folds it in).
     if (a.rfind("/layout/load/", 0) == 0) {
         const int n = std::atoi(a.c_str() + 13);          // counted like snapshots
-        if (n >= 1 && n <= 8) { st.lastLayout = n - 1; return true; }
+        if (n >= 1 && n <= kLayoutSlots) { st.lastLayout = n - 1; return true; }
         return false;
     }
 

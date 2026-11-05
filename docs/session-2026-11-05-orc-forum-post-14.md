@@ -7,12 +7,12 @@ Auslöser: Frank wollte die Punkte einzeln freigeben, Plan im Chat, jeder Punkt 
 - **360-Lampe**, UF8 und UF1: hell bei offenem Einstellungsfenster, sonst gedimmt (Frank: gedimmt, nicht dunkel). Der Timer der App schreibt `Surface::setSettingsShown`.
 - **Layoutwechsel von hier.** `Manager::send` fragt nach `/layout/load/` sofort neu, und die nächsten zwei Runden entscheiden je allein (`kLayoutRounds`, `applyNameRound(..., 1)`). Zwei, weil die erste noch das alte Layout erwischen kann. Ein Wechsel am Rechner bleibt bei zwei Runden à 3 s.
 - **PAN** (`0x6E`): `Side::panOnPots`, `gainParam` fragt es für Anzeige, Drehen und Drücken. ORC und Rea-Sixty-Side-Car (linker UF8, rechter behält die Bindung).
+- **Layouts:** TotalMix hat 6 (Frank hat nachgesehen), `kLayoutSlots`. Tasten 7 und 8 einer Layout-Bank sind leer und senden nichts. Die Gerätedatei nennt 8 Namen, darum stand im Code 8.
 - **Builtins** `rme_row_input`, `_playback`, `_output`, `_fx`, mit Lampe. LAYER bleibt Modi.
 - **Handbuch ORC:** PAN, SEL, 360, Reihen-Actions, versteckte Ausgänge und ALL.
 
 ## Bewusst nicht gebaut
 - Banner-Schrift: kein Schriftparameter im Rahmen, Frank will auch keinen Ersatz-Banner.
-- 3a Layouts: Frank bestätigt 8 Slots, ORC bleibt bei acht.
 - Schalter „LAYER = Reihen".
 
 ## OSC-Tabelle (rme-audio.de/downloads/globalosc_protocol_b2.zip, Stand 21.07.26)

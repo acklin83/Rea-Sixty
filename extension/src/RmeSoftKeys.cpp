@@ -73,9 +73,10 @@ DK rmeKind(int bank)
 
 // Moved from the extension's dynamicBankSlot_ (main.cpp), 25.09.2026, word for
 // word apart from the struct it fills.
-// ⛔ TotalMix always has eight of each, so every key is present; the name comes
-// from its state file (RmeNames.h). Without a link the names stay and the lamp
-// goes dark, and the press does nothing (Frank 22.09.).
+// ⛔ TotalMix always has eight snapshots and six layouts (kLayoutSlots), so those
+// keys are present and layout keys 7 and 8 are empty; the name comes from its
+// state file (RmeNames.h). Without a link the names stay and the lamp goes dark,
+// and the press does nothing (Frank 22.09.).
 DynSlot dynSlot(DK kind, int slot)
 {
     DynSlot d;
@@ -89,6 +90,7 @@ DynSlot dynSlot(DK kind, int slot)
         d.led   = c.led;
         return d;
     }
+    if (kind == DK::RmeLayouts && slot >= kLayoutSlots) return d;
     const auto& nm = namesFromDisk();
     const bool snap = (kind == DK::RmeSnapshots);
     d.label = snap ? snapshotName(nm, slot) : layoutName(nm, slot);
@@ -121,6 +123,7 @@ bool loadDyn(DK kind, int slot)
         return true;
     }
     if (kind != DK::RmeSnapshots && kind != DK::RmeLayouts) return false;
+    if (kind == DK::RmeLayouts && slot >= kLayoutSlots) return false;
     auto& rm = manager();
     if (rm.link() != LinkState::Online) return false;
     // Snapshots count from 1 on the wire (protocol sheet); layouts are sent the
