@@ -26,5 +26,9 @@ Alle 47 ctests, `check_builtin_docs.py`, `orc_manual.py --check`. Neue Tests: PA
 ## Nicht geprüft
 Am echten TotalMix und am Gerät. Windows-Teil (`webwindow::isShowing`, `OrcTray.cpp`) nur über CI gebaut, nicht gestartet. Ob die erste Runde nach dem Laden einen Kanal kurz fälschlich wegnimmt, ist nicht gemessen.
 
+## Release
+ORC 1.6.3 (Build 13), `275d8554`, DMG notarisiert, Installer aus CI-Lauf 42000314608, Handbuch ORC `42e43a4`. Rea-Sixty hat die Änderungen auf main, ohne Tag. Website `6bbfb175` nach `private` gepusht, Deploy macht Frank.
+Beim Warten auf die CI: ORC Windows war einmal rot, weil der libusb-Download 92 Byte lieferte (Prüfsumme). Neu gestartet, grün.
+
 ## Offen
-Kein Release. `/Applications/ORC.app` ist ein Dev-Build (Version 1.6.2, Build 12 im Plist, neuer Code), das laufende ORC muss Frank neu starten.
+Das Anmeldeobjekt `2.ch.stoersender.orc` zeigt nach dem Bundle-Tausch in den Scratchpad, siehe Memory `orc-dev-build-install`.
