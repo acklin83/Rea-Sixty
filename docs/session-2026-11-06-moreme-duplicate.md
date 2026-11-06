@@ -19,6 +19,11 @@ column fold; "Dürfen nie 2 Performer denselben Output haben!"
   menu with the owner's name; each group is one line (triangle, colour, name, "n ch") and opens on
   click. Closed from the factory, a new group opens; which are open is per browser
   (`localStorage` `moreme.desk.groupsOpen`).
+- Second round (Frank: dot and font changed on opening, pills untidy, name field too small, count too
+  far from the edge): the head is the same closed and open (round dot, name, count at the right edge);
+  open, the dot is the colour picker and the name a frameless field. The channels are a list as in the
+  phone's settings (dot, name, Remove). The x left the head: *Delete group* below the list, with a
+  question. Colour inputs are round in WebKit everywhere on the page (fader rows and performer too).
 - Manual (`extension/orc/manual/template.html`): Output row, Duplicate row, groups as lines.
 
 ## Checked
@@ -32,4 +37,5 @@ column fold; "Dürfen nie 2 Performer denselben Output haben!"
 
 - The rule is on the output spec. `output:8` and `phones1` could be the same bus if TotalMix
   later gives output 8 the Phones 1 role; that case is not caught.
-- Not installed in /Applications (only on Frank's word).
+- Installed in /Applications on Frank's word (06.11., Developer ID, not notarised). ORC was not
+  running at the time; the login item still points to /Applications/ORC.app.
