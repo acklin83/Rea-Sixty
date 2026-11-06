@@ -544,13 +544,22 @@ void Manager::workerLoop()
         // A new ask starts the round afresh, also when the last one was still
         // collecting: stoerme's bridge does the same (clearTimeout, new sets).
         if (roundsMs_.load() > 0) {
+            // ⛔ A NEW ASK DOES NOT LIFT THE OLD ROUND'S GUARD. TotalMix sends a round
+            // over up to two seconds; its late packets still carry the value from
+            // before a write. A second ask in between (the follow-ups after
+            // connecting, a stereo flip, a layout load) used to clear the list, and
+            // the next late packet moved the fader back (CI macos-x86_64, 05./06.11.2026,
+            // test_rme_osc "a late round value"). The list ends with the round's commit.
+            const bool underWay = collecting;
             collecting = true;
             collectIn.clear();
             collectPb.clear();
             commitAt = lastAsk + kRoundFirstAnswer;
             roundNames = NameRound{};
-            std::lock_guard<std::mutex> lk(mx_);
-            writtenSinceAsk_.clear();
+            if (!underWay) {
+                std::lock_guard<std::mutex> lk(mx_);
+                writtenSinceAsk_.clear();
+            }
         }
     };
 

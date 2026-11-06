@@ -39,3 +39,24 @@ column fold; "Dürfen nie 2 Performer denselben Output haben!"
   later gives output 8 the Phones 1 role; that case is not caught.
 - Installed in /Applications on Frank's word (06.11., Developer ID, not notarised). ORC was not
   running at the time; the login item still points to /Applications/ORC.app.
+
+## CI red on macos-x86_64: rme_osc "a late round value" (07.11.)
+
+Red in 4 of 6 Build runs since `23b0a7b6` (05.11.), ORC 1.6.3's session commit included; nobody
+looked. Not flaky by chance: reproduced locally every time by moving the write 100 to 250 ms before
+the follow-up ask ORC sends 10 s after connecting (`kFollowUps`). The slower Intel runner put it
+there often.
+
+Real bug, not only the test: `ask()` cleared `writtenSinceAsk_` on every ask, also while the previous
+round was still being collected. TotalMix sends a round over up to two seconds, so a late packet of
+that round, carrying the value from before a fader write, overwrote the write after any second ask
+(follow-ups, a stereo flip, a layout load, `refresh()`). Fixed in `RmeManager.cpp`: an ask while a
+round is under way keeps the list; it ends with the round's commit. Shared code, so Rea-Sixty's RME
+link has the same fix.
+
+New check in `test_rme_osc`: a round whose old volume arrives 300 ms late, a write, `refresh()`;
+fails 3 of 3 without the fix, passes 3 of 3 with it. The test's "all checks passed" line moved to
+the end; it used to print above a FAIL from the later sections.
+
+Not changed: the follow-up asks still ignore `kRoundQuietMs` (they start a round under a moving
+fader in the first 10 s after connecting). With the guard kept, that no longer loses a write.

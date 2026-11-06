@@ -802,7 +802,6 @@ int main()
         check(!parseNames("<General/>", none), "no names, no parse");
     }
 
-    if (g_fail == 0) std::printf("test_rme_osc: all checks passed\n");
         // ⛔ Band 1 and band 3 do not share indices 2 and 3. Frank measured both at
     // the mixer on 2026-09-25 after the surface offered a high-pass and set a
     // low-pass: index 2 is "the pass filter of this band", and the bands sit at
@@ -1159,7 +1158,7 @@ int main()
         const int recvPort = ntohs(b.sin_port);
         ::close(rxFd);
 
-        std::atomic<bool> run{true}, showThree{true}, staleVolume{false};
+        std::atomic<bool> run{true}, showThree{true}, staleVolume{false}, lateVolume{false};
         std::atomic<int>  asks{0};
         std::thread fake([&] {
             while (run.load()) {
@@ -1182,6 +1181,11 @@ int main()
                 if (showThree.load()) say(encode("/output/3/name", { Arg::fromString("Phones") }));
                 if (staleVolume.load()) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(150));
+                    say(encodeFloat("/output/1/volume", -40.0f));
+                }
+                // One round whose old volume comes late, after the next ask has gone out.
+                if (lateVolume.exchange(false)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(300));
                     say(encodeFloat("/output/1/volume", -40.0f));
                 }
             }
@@ -1240,6 +1244,18 @@ int main()
             mgr.send("/output/1/volume", -6.0f);
             std::this_thread::sleep_for(std::chrono::milliseconds(400));
             check(mgr.snapshot().outputs[1].volume == -6.0, "a late round value does not overwrite the write");
+            // ⛔ Nor does a second ask while that round still runs (the follow-ups after
+            // connecting, a stereo flip, a layout load): it used to clear the guard, and
+            // the round's late packet moved the fader back (CI macos-x86_64, 05.11.2026).
+            staleVolume.store(false);
+            lateVolume.store(true);
+            const int then = asks.load();
+            check(waitFor([&] { return asks.load() > then; }, 3000), "a round to write into");
+            mgr.send("/output/1/volume", -6.0f);
+            mgr.refresh();
+            std::this_thread::sleep_for(std::chrono::milliseconds(700));
+            check(asks.load() - then >= 2, "the second ask went out");
+            check(mgr.snapshot().outputs[1].volume == -6.0, "a second ask does not lift the guard of the round under way");
             mgr.stop();
         }
         run.store(false);
@@ -1248,5 +1264,8 @@ int main()
     }
 #endif
 
+// At the very end: before, it said "all checks passed" above a FAIL from the
+// sections below it (CI macos-x86_64, 05.11.2026).
+if (g_fail == 0) std::printf("test_rme_osc: all checks passed\n");
 return g_fail == 0 ? 0 : 1;
 }
