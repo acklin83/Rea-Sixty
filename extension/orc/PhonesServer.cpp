@@ -505,7 +505,9 @@ void Server::loop()
             switch (c.reader.feed(f, text)) {
                 case ws::Reader::Got::Nothing: break;
                 case ws::Reader::Got::Message:
-                    if (c.desk) deskText(text);
+                    // ⇨ The desk has already shown its edit. Refused or cut back
+                    // (an output someone has), it gets the book again regardless.
+                    if (c.desk) { deskText(text); c.deskSent.clear(); }
                     else        mixer.message(c.mixId, text, nowMs);
                     break;
                 case ws::Reader::Got::Ping:    queue(c, ws::encodeFrame(ws::kPong, text)); break;

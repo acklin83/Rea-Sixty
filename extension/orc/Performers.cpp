@@ -167,6 +167,33 @@ void readFields(const wdl_json_element* e, Performer& p)
     }
 }
 
+// ⛔ ONE PERFORMER PER OUTPUT (Frank 06.11.2026: "Dürfen nie 2 Performer
+// denselben Output haben!"): two would move the same mix. "" is no output, and
+// any number of performers may have none. Every way into the book goes through
+// these: the file, add, copy, update.
+bool outputTaken(const std::vector<Performer>& v, const std::string& out, const std::string& exceptId)
+{
+    if (out.empty()) return false;
+    return std::any_of(v.begin(), v.end(),
+                       [&](const Performer& p) { return p.id != exceptId && p.output == out; });
+}
+
+// A file from before the rule: the first performer on an output keeps it.
+void dropSharedOutputs(std::vector<Performer>& v)
+{
+    for (std::size_t i = 1; i < v.size(); ++i)
+        for (std::size_t k = 0; k < i; ++k)
+            if (!v[i].output.empty() && v[k].output == v[i].output) { v[i].output.clear(); break; }
+}
+
+// A new performer's output: the first headphone nobody has yet, else none.
+std::string firstFreePhones(const std::vector<Performer>& v)
+{
+    for (const char* o : { "phones1", "phones2", "phones3", "phones4" })
+        if (!outputTaken(v, o, {})) return o;
+    return {};
+}
+
 std::vector<Performer> readPerformers(const wdl_json_element* arr)
 {
     std::vector<Performer> out;
@@ -183,6 +210,7 @@ std::vector<Performer> readPerformers(const wdl_json_element* arr)
         readFields(e, p);
         out.push_back(std::move(p));
     }
+    dropSharedOutputs(out);
     return out;
 }
 
@@ -304,23 +332,36 @@ bool applyDesk(Book& b, const std::string& json, const std::function<std::string
         Performer p;
         p.id   = token();
         if (!validToken(p.id)) return false;
-        p.name = "Performer " + std::to_string(b.performers.size() + 1);
-        // The first headphone nobody has yet.
-        for (const char* o : { "phones1", "phones2", "phones3", "phones4" }) {
-            if (std::none_of(b.performers.begin(), b.performers.end(),
-                             [&](const Performer& x) { return x.output == o; })) {
-                p.output = o;
-                break;
-            }
-        }
+        p.name   = "Performer " + std::to_string(b.performers.size() + 1);
+        p.output = firstFreePhones(b.performers);
         b.performers.push_back(std::move(p));
+        return true;
+    }
+    // ⇨ A COPY (Frank 06.11.2026): every setting and the fader list, not the mix.
+    // A link of its own, the next free headphone, and no colour of its own, so
+    // the palette tells the two apart. At the end of the list: in between, it
+    // would move the palette colour of everyone after it.
+    if (t == "copy") {
+        const auto it = find();
+        if (it == b.performers.end() || b.performers.size() >= kMaxPerformers) return false;
+        Performer c = *it;
+        c.id = token();
+        if (!validToken(c.id) || std::any_of(b.performers.begin(), b.performers.end(),
+                                             [&](const Performer& x) { return x.id == c.id; })) return false;
+        c.name = (c.name.empty() ? std::string("Performer") : c.name) + " copy";
+        if (c.name.size() > kMaxText) c.name.resize(kMaxText);
+        c.colour.clear();
+        c.output = firstFreePhones(b.performers);
+        b.performers.push_back(std::move(c));
         return true;
     }
     if (t == "update") {
         const auto it = find();
         const wdl_json_element* e = root->get_item_by_name("performer");
         if (it == b.performers.end() || !e || !e->is_object()) return false;
+        const std::string before = it->output;
         readFields(e, *it);
+        if (outputTaken(b.performers, it->output, it->id)) it->output = before;
         return true;
     }
     if (t == "groups") {

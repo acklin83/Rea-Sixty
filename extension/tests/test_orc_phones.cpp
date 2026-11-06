@@ -491,6 +491,38 @@ int main()
         EXPECT(!ph::applyDesk(b, "not json", token) && !ph::applyDesk(b, R"({"t":"remove","id":"nobody"})", token));
         EXPECT(ph::validToken("abcd1234") && !ph::validToken("abc") && !ph::validToken("../etc") && !ph::validToken("ABCD"));
 
+        // ⛔ One performer per output (Frank 06.11.2026), and the copy.
+        {
+            ph::Book c;
+            EXPECT(ph::applyDesk(c, R"({"t":"add"})", token) && ph::applyDesk(c, R"({"t":"add"})", token));
+            const std::string a = c.performers[0].id, bId = c.performers[1].id;
+            EXPECT(ph::applyDesk(c, R"({"t":"update","id":")" + a + R"(","performer":{"name":"Bass","role":"Band","output":"phones1","colour":"#112233","useLayout":false,"faders":[{"src":"in:1","name":"Kick"}],"master":false,"chanEq":1,"hide":true}})", token));
+            // Someone else's output: the rest of the edit lands, the output stays.
+            EXPECT(ph::applyDesk(c, R"({"t":"update","id":")" + bId + R"(","performer":{"name":"Keys","output":"phones1"}})", token));
+            EXPECT(c.performers[1].name == "Keys" && c.performers[1].output == "phones2");
+            EXPECT(ph::applyDesk(c, R"({"t":"update","id":")" + bId + R"(","performer":{"name":"Keys","output":""}})", token)
+                   && c.performers[1].output.empty());   // no output: any number may have none
+            // The copy: everything but the link, the colour and the output.
+            EXPECT(ph::applyDesk(c, R"({"t":"copy","id":")" + a + R"("})", token) && c.performers.size() == 3);
+            const ph::Performer& o = c.performers[0];
+            const ph::Performer& k = c.performers[2];
+            EXPECT(k.id != a && ph::validToken(k.id));
+            EXPECT(k.name == "Bass copy" && k.role == "Band" && k.colour.empty());
+            EXPECT(k.output == "phones2");                // the next free headphone
+            EXPECT(!k.useLayout && k.faders.size() == 1 && k.faders[0].src == "in:1" && k.faders[0].name == "Kick");
+            EXPECT(!k.master && k.chanEq == 1 && k.hide && o.output == "phones1");
+            EXPECT(!ph::applyDesk(c, R"({"t":"copy","id":"nobody"})", token));
+            // All four taken: the copy has none.
+            EXPECT(ph::applyDesk(c, R"({"t":"copy","id":")" + a + R"("})", token) && c.performers[3].output == "phones3");
+            EXPECT(ph::applyDesk(c, R"({"t":"copy","id":")" + a + R"("})", token) && c.performers[4].output == "phones4");
+            EXPECT(ph::applyDesk(c, R"({"t":"copy","id":")" + a + R"("})", token) && c.performers[5].output.empty());
+            // A file from before the rule: the first on an output keeps it, in snapshots too.
+            ph::Book f;
+            EXPECT(ph::parseBook(R"({"version":1,"current":"","performers":[{"id":"perfone1","output":"phones1"},{"id":"perftwo2","output":"phones1"},{"id":"perfthr3","output":"phones2"}],"snapshots":{"S":{"performers":[{"id":"perfone1","output":"main"},{"id":"perftwo2","output":"main"}]}}})", f));
+            EXPECT(f.performers[0].output == "phones1" && f.performers[1].output.empty() && f.performers[2].output == "phones2");
+            EXPECT(f.snapshots["S"].performers[0].output == "main" && f.snapshots["S"].performers[1].output.empty());
+        }
+
         // ⛔ Studio Control: this Mac, directly, under the loopback's name.
         EXPECT(ph::deskAllowed("127.0.0.1", "", "", "127.0.0.1:8088", "http://127.0.0.1:8088"));
         EXPECT(ph::deskAllowed("127.0.0.1", "", "", "localhost:8088", ""));
