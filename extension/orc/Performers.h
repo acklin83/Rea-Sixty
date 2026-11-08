@@ -50,6 +50,10 @@ struct Group {
     std::string name;
     std::string colour;   // "#rrggbb"
     std::vector<std::string> members;   // "in:3", "pb:5"
+    // ⇨ A MEMBER'S NAME IN THIS GROUP (Frank 08.11.2026), for everyone who sees the
+    // group: every performer and Phones 1-4. "" or missing = TotalMix' name. A
+    // performer's own fader name for the channel still comes first.
+    std::map<std::string, std::string> names;   // member src -> name
     bool operator==(const Group&) const = default;
 };
 

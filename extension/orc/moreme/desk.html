@@ -90,6 +90,12 @@ input[type=color]::-moz-color-swatch{border:none;border-radius:50%}
 .gm:last-of-type{border-bottom:none}
 .gm .sw{width:12px;height:12px;border-radius:50%;flex:none}
 .gm .n{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* A member's name: a field without a frame until the mouse or the cursor is on it,
+   as the group's own name. Empty shows TotalMix' name as the placeholder. */
+.gm input.n{font:inherit;color:var(--fg);background:transparent;border:1px solid transparent;border-radius:6px;padding:3px 6px;margin-left:-7px;height:auto;width:100%}
+.gm input.n::placeholder{color:var(--fg2)}
+.gm input.n:hover{border-color:var(--line)}
+.gm input.n:focus{border-color:#444;background:var(--bg3);outline:none}
 .gm button{background:var(--bg3);border:none;border-radius:6px;color:var(--fg);font:inherit;font-size:12px;padding:4px 9px;cursor:pointer}
 .gm button:hover{background:#2a2a2a}
 .gml{margin-top:6px}
@@ -266,7 +272,8 @@ function drawGroups(){
     +'<div class="grh"><button class="tri" data-gt="'+esc(g.id)+'" aria-expanded="true" aria-label="Close group">&#9660;</button><input type="color" value="'+esc(g.colour||'#0099ff')+'" data-gc="'+i+'" aria-label="Colour">'
     +'<input type="text" class="gname" maxlength="64" value="'+esc(g.name)+'" placeholder="Group name" data-gn="'+i+'" aria-label="Name">'+cnt(g)+'</div>'
     +(g.members.length?'<div class="gml">'+g.members.map(m=>{const c=chan(m);
-      return '<div class="gm"><span class="sw" style="background:'+esc(c?c.color:'#888888')+'"></span><span class="n">'+esc(c?c.label:srcText(m)+' (not visible)')+'</span>'
+      return '<div class="gm"><span class="sw" style="background:'+esc(c?c.color:'#888888')+'"></span>'
+        +'<input type="text" class="n" maxlength="64" value="'+esc((g.names||{})[m]||'')+'" placeholder="'+esc(c?c.label:srcText(m)+' (not visible)')+'" data-gmn="'+i+'" data-v="'+esc(m)+'" aria-label="Name in this group">'
         +'<button data-gm="'+i+'" data-v="'+esc(m)+'">Remove</button></div>'}).join('')+'</div>':'')
     +(free.length?'<select class="addch" data-ga="'+i+'" aria-label="Add channel"><option value="">Add channel&hellip;</option>'+chanOptions(free)+'</select>':'')
     +'<button class="b sm danger gdel" data-gx="'+i+'">Delete group</button></div>').join('');
@@ -281,7 +288,10 @@ function drawGroups(){
   document.querySelectorAll('[data-gn]').forEach(e=>e.oninput=()=>{G()[e.dataset.gn].name=e.value;pushGroups()});
   document.querySelectorAll('[data-gx]').forEach(e=>e.onclick=()=>{const g=G()[e.dataset.gx];if(!g)return;
     ask('Delete the group '+(g.name||'without a name')+'? Performers lose its fader.').then(ok=>{if(!ok)return;const k=G().indexOf(g);if(k<0)return;G().splice(k,1);drawGroups();pushGroups(true)})});
-  document.querySelectorAll('[data-gm]').forEach(e=>e.onclick=()=>{const g=G()[e.dataset.gm];g.members=g.members.filter(m=>m!==e.dataset.v);drawGroups();pushGroups(true)});
+  document.querySelectorAll('[data-gm]').forEach(e=>e.onclick=()=>{const g=G()[e.dataset.gm];g.members=g.members.filter(m=>m!==e.dataset.v);if(g.names)delete g.names[e.dataset.v];drawGroups();pushGroups(true)});
+  // ⇨ A MEMBER'S NAME belongs to the group: every performer and Phones 1-4 see it.
+  document.querySelectorAll('[data-gmn]').forEach(e=>e.oninput=()=>{const g=G()[e.dataset.gmn];if(!g)return;g.names=g.names||{};
+    if(e.value.trim())g.names[e.dataset.v]=e.value;else delete g.names[e.dataset.v];pushGroups()});
   document.querySelectorAll('[data-ga]').forEach(e=>e.onchange=()=>{if(!e.value)return;G()[e.dataset.ga].members.push(e.value);drawGroups();pushGroups(true)});
 }
 function drawSnap(){
@@ -448,7 +458,7 @@ $('#add').onclick=()=>{const before=S.book.performers.map(p=>p.id);addWait=befor
 $('#addGroup').onclick=()=>{
   const k='abcdefghijklmnopqrstuvwxyz0123456789';
   let id='';for(let i=0;i<8;i++)id+=k[Math.floor(Math.random()*k.length)];
-  S.book.groups.push({id,name:'',colour:'#0099ff',members:[]});setGOpen(id,true);drawGroups();pushGroups(true);
+  S.book.groups.push({id,name:'',colour:'#0099ff',members:[],names:{}});setGOpen(id,true);drawGroups();pushGroups(true);
 };
 // The copy is made in ORC (applyDesk "copy"); this edit first, so it goes along.
 $('#dup').onclick=()=>{const p=P();if(!p)return;push(true);addWait=S.book.performers.map(x=>x.id);send({t:'copy',id:p.id})};

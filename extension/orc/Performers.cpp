@@ -73,7 +73,14 @@ std::string groupsJson(const std::vector<Group>& v)
         o += "{\"id\":" + jstr(g.id) + ",\"name\":" + jstr(g.name) + ",\"colour\":" + jstr(g.colour) + ",\"members\":[";
         for (std::size_t m = 0; m < g.members.size(); ++m)
             o += (m ? "," : "") + jstr(g.members[m]);
-        o += "]}";
+        o += "],\"names\":{";
+        bool firstName = true;
+        for (const auto& [src, name] : g.names) {
+            if (!firstName) o += ",";
+            firstName = false;
+            o += jstr(src) + ":" + jstr(name);
+        }
+        o += "}}";
     }
     return o + "]";
 }
@@ -240,6 +247,19 @@ std::vector<Group> readGroups(const wdl_json_element* arr)
                         return std::find(o.members.begin(), o.members.end(), src) != o.members.end();
                     })) continue;
                 g.members.push_back(src);
+            }
+        }
+        // Names of members only; an empty one is no name.
+        if (const wdl_json_element* nm = e->get_item_by_name("names"); nm && nm->is_object()) {
+            for (int k = 0; ; ++k) {
+                const wdl_json_element* x = nm->enum_item(k);
+                const char* key = nm->enum_item_name(k);
+                if (!x || !key) break;
+                const std::string src = key;
+                if (std::find(g.members.begin(), g.members.end(), src) == g.members.end()) continue;
+                std::string n = x->m_value ? x->m_value : "";
+                if (n.size() > kMaxText) n.resize(kMaxText);
+                if (!n.empty()) g.names[src] = n;
             }
         }
         out.push_back(std::move(g));

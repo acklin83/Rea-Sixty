@@ -491,6 +491,16 @@ std::vector<Mixer::Src> Mixer::sourcesOf_(const std::string& mix) const
         ++i;
         return x;
     };
+    // A member as a member: the group's name for it, when it has one. Not for a
+    // channel listed on its own, which keeps TotalMix' name or its fader's.
+    auto asMember = [&](Src x) {
+        for (const Group& g : groups_) {
+            if (g.id != x.group) continue;
+            if (const auto it = g.names.find(x.id); it != g.names.end() && !it->second.empty())
+                x.label = it->second;
+        }
+        return x;
+    };
     const Performer* p = perfOfMix_(mix);
     if (p && !p->useLayout) {
         auto once = [&](const std::string& id) {
@@ -511,7 +521,7 @@ std::vector<Mixer::Src> Mixer::sourcesOf_(const std::string& mix) const
         auto wholeGroup = [&](const Group& g) {
             for (const std::string& m : g.members) {
                 std::string kind; int n = 0;
-                if (splitSrc(m, kind, n) && visible(kind, n) && once(m)) out.push_back(look(kind, n));
+                if (splitSrc(m, kind, n) && visible(kind, n) && once(m)) out.push_back(asMember(look(kind, n)));
             }
         };
         for (const Fader& f : p->faders) {
@@ -538,8 +548,8 @@ std::vector<Mixer::Src> Mixer::sourcesOf_(const std::string& mix) const
             }
         return out;
     }
-    for (const int n : visIn_) out.push_back(look("in", n));
-    for (const int n : visPb_) out.push_back(look("pb", n));
+    for (const int n : visIn_) out.push_back(asMember(look("in", n)));
+    for (const int n : visPb_) out.push_back(asMember(look("pb", n)));
     return out;
 }
 

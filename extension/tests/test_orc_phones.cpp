@@ -696,6 +696,58 @@ int main()
         EXPECT(ph::parseBook(R"({"version":1,"current":"Old","performers":[],"snapshots":{"Old":[{"id":"oldperf1","name":"Ann"}]}})", old));
         EXPECT(old.snapshots["Old"].performers.size() == 1 && old.snapshots["Old"].groups.empty() && old.current == "Old");
 
+        // ⇨ A member's name in the group (Frank 08.11.2026): in the file, on every phone.
+        {
+            ph::Book nb;
+            EXPECT(ph::applyDesk(nb, R"({"t":"groups","groups":[{"id":"drums1","name":"Drums","members":["in:1","in:2"],"names":{"in:1":"Kick In","pb:9":"no member","in:2":""}}]})", token));
+            EXPECT(nb.groups[0].names.size() == 1 && nb.groups[0].names["in:1"] == "Kick In");
+            ph::Book nback;
+            EXPECT(ph::parseBook(ph::bookJson(nb), nback) && nback.groups[0].names == nb.groups[0].names);
+
+            ph::Group named{ "drums1", "Drums", "#ff0000", { "in:1", "in:2" } };
+            named.names["in:1"] = "Kick In";
+            auto labels = [](Mixer& m, int c, const std::string& mix) {
+                m.message(c, R"({"t":"select","mix":")" + mix + R"("})", 0);
+                auto o = m.takeOut();
+                return to(o, c);
+            };
+            // Phones 1-4: the member shows it, the other one keeps TotalMix' name.
+            {
+                Mixer m;
+                rme::State s = rig();
+                m.setGroups({ named });
+                m.sync(s, vis(1, { 1, 2 }, { 0 }), true);
+                const int c = m.open("a");
+                m.message(c, R"({"t":"hello"})", 0);
+                const std::string got = labels(m, c, "phone1");
+                EXPECT(has(got, R"("label":"Kick In")") && has(got, R"("label":"Snare")") && !has(got, R"("label":"Kick")"));
+            }
+            // A performer: through the group; their own fader name first; alone, not a member.
+            {
+                Mixer m("1234");
+                rme::State s = rig();
+                m.setGroups({ named });
+                m.sync(s, vis(1, { 1, 2 }, { 0 }), true);
+                ph::Performer p;
+                p.id = "drumsaaa"; p.output = "phones1"; p.useLayout = false;
+                p.faders = { { "group:drums1", "", "" } };
+                m.setPerformers({ p });
+                const int c = m.open("10.0.0.5");
+                m.message(c, R"({"t":"hello","pin":"1234","performer":"drumsaaa"})", 0);
+                m.takeOut();
+                EXPECT(has(labels(m, c, "perf:drumsaaa"), R"("label":"Kick In")"));
+                p.faders = { { "group:drums1", "", "" }, { "in:1", "Bassdrum", "" } };
+                m.setPerformers({ p });
+                m.takeOut();
+                EXPECT(has(labels(m, c, "perf:drumsaaa"), R"("label":"Bassdrum")"));
+                p.faders = { { "in:1", "", "" } };
+                m.setPerformers({ p });
+                m.takeOut();
+                const std::string alone = labels(m, c, "perf:drumsaaa");
+                EXPECT(has(alone, R"("label":"Kick")") && !has(alone, "Kick In"));
+            }
+        }
+
         // The mixer. in:1 -6, in:2 0, pb:0 -20 on bus 8.
         Mixer mx;
         rme::State st = rig();
