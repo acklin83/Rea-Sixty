@@ -11,6 +11,8 @@
 ## Release v0.9.2
 Tag on `9cb52060`, CI tag run 42599950689 green, Mac arm64 + Intel notarised, GitHub release with 16 assets, ReaPack 0.9.2 (12 download URLs 200), website merged (`bcbcce52`), deployed by Frank, 9 routes 200, manual v0.9.2.
 
+## Release ORC 1.6.4 (build 14)
+Version `3b9990e1`, `orc-release.sh` (DMG notarised), Windows installer from CI run 42602852572, GitHub release acklin83/ORC v1.6.4 with four assets, latest downloads 200, manual `6e36188` live at version 1.6.4. /Applications replaced from the DMG with ORC quit first; the login item stayed on /Applications. Website /orc button `22a049df` pushed to `private`, deploy by Frank. Forum text handed to Frank.
+
 ## Open
-- MoreMe changes after ORC 1.6.3 go out with the next ORC version.
 - The case "REAPER opens the .rpp itself at start" was never measured.
