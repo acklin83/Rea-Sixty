@@ -27169,8 +27169,24 @@ void shutdownDevices_()
     g_slotTrack.fill(nullptr);
 }
 
+// ⇨ MESSUNG FUER v0.9.2 (09.11.2026), faellt mit dem Bau der Uebergabe weg
+// ([[orc-handover-after-project-load]]): wann beginnt beim REAPER-Start das
+// Laden des Projekts, verglichen mit der Surface und dem ersten Timer, und steht
+// der Timer, waehrend geladen wird? Drei Zeilen in /tmp/orc.log, alle mit
+// "probe:", nur wo ORC installiert ist (orcLogLine_).
+static bool orcProbeProcessLine_(const char*, ProjectStateContext*, bool,
+                                 project_config_extension_t*) { return false; }
+static void orcProbeSave_(ProjectStateContext*, bool, project_config_extension_t*) {}
+static void orcProbeBeginLoad_(bool isUndo, project_config_extension_t*)
+{
+    if (!isUndo) orcLogLine_("probe: project load begins");
+}
+project_config_extension_t g_orcProbeProjConfig = {
+    orcProbeProcessLine_, orcProbeSave_, orcProbeBeginLoad_, nullptr};
+
 ReaSixtySurface::ReaSixtySurface()
 {
+    orcLogLine_("probe: surface created");
     initDevices_();
     plugin_register("timer", reinterpret_cast<void*>(onTimer));
 }
@@ -47138,6 +47154,22 @@ bool g_throwCameFromImGuiFrame = false;
 
 void onTimer()
 {
+    // ⇨ MESSUNG FUER v0.9.2, s. g_orcProbeProjConfig: erster Tick und jede
+    // Luecke ueber 250 ms in den ersten zwei Minuten.
+    {
+        static int64_t sProbeStart = 0, sProbePrev = 0;
+        const int64_t now = nowMs_();
+        if (sProbeStart == 0) {
+            sProbeStart = now;
+            orcLogLine_("probe: first timer tick");
+        } else if (now - sProbeStart < 120000 && now - sProbePrev > 250) {
+            char b[64];
+            std::snprintf(b, sizeof(b), "probe: timer gap %lld ms",
+                          static_cast<long long>(now - sProbePrev));
+            orcLogLine_(b);
+        }
+        sProbePrev = now;
+    }
     // ⇨ THE WHOLE TICK, NOT JUST OUR PAINTER.
     // Measured 2026-08-29: the Overview froze for seconds while the pacer kept
     // emitting, so the PAINTER had stopped running -- but timing
@@ -61697,6 +61729,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // Replaces an earlier SetProjExtState attempt where the writes
     // never made it to disk (Frank 2026-05-27).
     plugin_register("projectconfig", &g_tempSelsetProjConfig);
+    plugin_register("projectconfig", &g_orcProbeProjConfig);   // MESSUNG v0.9.2
     // Folder Mode's spilled folders (FOLDERSPILL) → .rpp, per tab.
     plugin_register("projectconfig", &g_folderSpillProjConfig);
     // 1..8 Selection Set slots — project-scoped data uses the same
