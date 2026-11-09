@@ -35427,7 +35427,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     // back repaints everything: the statics still describe the pre-meter state.
     static bool sPlaneHeld = false;
     // ⛔ EIN SIDE-CAR IST NICHT DIE METER-ANSICHT. Jeder Textschreibvorgang
-    // unten haengt an `!meterView`, und `g_uf1MeterView` bleibt stehen, wenn man
+    // unten haengt an `planeWrite` (also `!meterView`), und `g_uf1MeterView` bleibt stehen, wenn man
     // aus der Meter-Ansicht in ein Side-Car geht — dann blieb die Zone ueber dem
     // Fader leer (Frank 21.09.: "kanalname wird nicht angezeigt auf dem display
     // oberhalb des faders"). Solange ein Side-Car den Schirm haelt, ist "sind
@@ -35437,6 +35437,28 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
                         && g_uf1SideCar.load() == Uf1SideCar::None;
     if (meterView) sPlaneHeld = true;
     else if (sPlaneHeld) { sPlaneHeld = false; changed = true; }
+    // ⇨ ABER EINE NEUE SPUR IST EIN NEUER STRIP. Die Sperre oben haelt die
+    // Ebene still, solange dieselbe Spur auf dem Fader liegt: SSL schreibt dort
+    // nichts, und wir sollen nicht alle paar Sekunden nachschreiben. Wechselt
+    // aber die Spur, stand oben weiter der Name der alten, waehrend Pegel-LEDs
+    // und SEL schon der neuen folgten (Frank 09.11.2026: "track name on the
+    // small screen doesn't update when changing tracks"). Darum malt ein
+    // Spurwechsel in der Meter-Ansicht den Strip EINMAL ganz neu, wie in der
+    // Kanal-Ansicht; dazwischen bleibt es still. Als Extender zaehlt der neunte
+    // Send mit, denn dessen Ziel steht dann im Namen.
+    static MediaTrack* sStripTr      = nullptr;
+    static MediaTrack* sStripSendTr  = nullptr;
+    static int         sStripSendCat = kRouteNone;
+    static int         sStripSendIdx = -1;
+    MediaTrack* const stripSendTr  = sendOverride ? sendOverride->track        : nullptr;
+    const int         stripSendCat = sendOverride ? sendOverride->sendCategory : kRouteNone;
+    const int         stripSendIdx = sendOverride ? sendOverride->sendIndex    : -1;
+    const bool stripMoved = tr != sStripTr || stripSendTr != sStripSendTr
+                         || stripSendCat != sStripSendCat || stripSendIdx != sStripSendIdx;
+    sStripTr = tr; sStripSendTr = stripSendTr;
+    sStripSendCat = stripSendCat; sStripSendIdx = stripSendIdx;
+    if (meterView && stripMoved) changed = true;
+    const bool planeWrite = !meterView || stripMoved;
 
     // UF1 Extender send fader (Step 4): the strip's NAME + dB read out the 9th
     // SEND, not tr. Name = the send's dest / hw-out (routeName_ — ground truth),
@@ -35506,7 +35528,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     }
     if (sendZone) name = ovName;   // Extender: the 9th send's dest, not the track
     if (faderDb && !faderDb->name.empty()) name = faderDb->name;
-    if (!meterView && (changed || name != sName)) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
+    if (planeWrite && (changed || name != sName)) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
 
     // Output dB (0x000c): 0x00 + value left-justified, NUL-padded to 6, + 2-byte
     // unit. The unit is OURS here too — the Hue screen already sends spaces in
@@ -35519,7 +35541,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     if (sendZone) dbv = ovDb;      // Extender: the 9th send's EFFECTIVE level
     if (faderDb && faderDb->set) { dbv = faderDb->value; dbu = faderDb->unit; }
     static std::string sDbU = "dB";
-    if (!meterView && (changed || dbv != sDb || dbu != sDbU)) {
+    if (planeWrite && (changed || dbv != sDb || dbu != sDbU)) {
         sDb = dbv; sDbU = dbu;
         std::vector<uint8_t> p;
         p.push_back(0x00);
@@ -35626,7 +35648,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
             barCentre = 0x00;   // unipolar, no centre detent
         }
     }
-    if (!meterView && (changed || valLine != sValLine)) { sValLine = valLine; sendZoneText(uf1::scr::kValueLine, valLine); }
+    if (planeWrite && (changed || valLine != sValLine)) { sValLine = valLine; sendZoneText(uf1::scr::kValueLine, valLine); }
     // The bar's STYLE, which the init replay leaves at 0x03 = "off". Nothing
     // corrected it afterwards, so every position we sent to the bar below drew
     // nothing at all — not the Pan bar, not a Sticky Pot, not the preamp gain
@@ -35641,7 +35663,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     {
         static uint8_t sBarStyle = 0;
         constexpr uint8_t kStylePointer = 0x01;
-        if (!meterView && (changed || sBarStyle != kStylePointer)) {
+        if (planeWrite && (changed || sBarStyle != kStylePointer)) {
             sBarStyle = kStylePointer;
             g_uf1_dev->send(uf1::buildScreen(
                 uf1::scr::kBarStyle,
@@ -35650,7 +35672,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         }
     }
     const int barKey = barPos * 2 + (barCentre ? 1 : 0);
-    if (!meterView && (changed || barKey != sBarKey)) {
+    if (planeWrite && (changed || barKey != sBarKey)) {
         sBarKey = barKey;
         const std::vector<uint8_t> pb = { static_cast<uint8_t>(barPos), barCentre };
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVPotReadoutBar, pb));
@@ -35665,7 +35687,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     const int idx = numTr ? static_cast<int>(GetMediaTrackInfo_Value(numTr, "IP_TRACKNUMBER"))
                           : 0;
     const std::string ch = idx > 0 ? std::to_string(idx) : std::string();
-    if (!meterView && (changed || ch != sCh)) { sCh = ch; sendZoneText(uf1::scr::kChNumber, ch); }
+    if (planeWrite && (changed || ch != sCh)) { sCh = ch; sendZoneText(uf1::scr::kChNumber, ch); }
 
     // Track colour: SEL / track-colour element 0x07 (FF38 GRB) + the fader colour
     // BAR (0x0018, palette index), gated by the 0x0006 "channel populated" flag.
@@ -35779,7 +35801,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         // the "channel populated" flag and it GATES the colour bar. Sending the
         // colour without it paints nothing, which is the other half of why the
         // probe showed a black strip.
-        if (!meterView || swatch >= 0) {
+        if (planeWrite || swatch >= 0) {
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive, active));
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
         }
