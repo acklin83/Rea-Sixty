@@ -35444,7 +35444,8 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     // und SEL schon der neuen folgten (Frank 09.11.2026: "track name on the
     // small screen doesn't update when changing tracks"). Darum malt ein
     // Spurwechsel in der Meter-Ansicht den Strip EINMAL ganz neu, wie in der
-    // Kanal-Ansicht; dazwischen bleibt es still. Als Extender zaehlt der neunte
+    // Kanal-Ansicht; dazwischen bleibt es still, bis auf Name und dB, die
+    // jeder echten Aenderung folgen (unten). Als Extender zaehlt der neunte
     // Send mit, denn dessen Ziel steht dann im Namen.
     static MediaTrack* sStripTr      = nullptr;
     static MediaTrack* sStripSendTr  = nullptr;
@@ -35528,7 +35529,11 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     }
     if (sendZone) name = ovName;   // Extender: the 9th send's dest, not the track
     if (faderDb && !faderDb->name.empty()) name = faderDb->name;
-    if (planeWrite && (changed || name != sName)) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
+    // ⇨ Name und dB laufen in der Meter-Ansicht MIT (Frank 09.11.2026: "ja,
+    // beides mitlaufen lassen"): geschrieben wird nur, wenn sich der Inhalt
+    // aendert, nie auf einen der vielen `changed`-Anlaesse hin. Die uebrigen
+    // Zellen bleiben hinter `planeWrite`.
+    if ((planeWrite && changed) || name != sName) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
 
     // Output dB (0x000c): 0x00 + value left-justified, NUL-padded to 6, + 2-byte
     // unit. The unit is OURS here too — the Hue screen already sends spaces in
@@ -35541,7 +35546,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     if (sendZone) dbv = ovDb;      // Extender: the 9th send's EFFECTIVE level
     if (faderDb && faderDb->set) { dbv = faderDb->value; dbu = faderDb->unit; }
     static std::string sDbU = "dB";
-    if (planeWrite && (changed || dbv != sDb || dbu != sDbU)) {
+    if ((planeWrite && changed) || dbv != sDb || dbu != sDbU) {   // laeuft mit, s. Name
         sDb = dbv; sDbU = dbu;
         std::vector<uint8_t> p;
         p.push_back(0x00);
