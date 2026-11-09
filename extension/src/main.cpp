@@ -35414,52 +35414,15 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         sZoneBlank = false;
         changed    = true;
     }
-    // ⛔ THE METER VIEW LEAVES THIS PLANE ALONE, AS SSL 360 DOES.
-    // cap75 (360 entering the Meter view) and cap130 (2.1.12, Analogue, 110 s):
-    // SSL writes nothing to 0x00xx in the Meter view but 0009/000a/0015/0016.
-    // Our own frame trace of 2026-09-11 (22:49) showed name, dB, pan line, bar,
-    // channel number, colour bar (0x0018 = the track's palette index) and the
-    // populated flag going out every few seconds on the Analogue screen, on top
-    // of SSL's nine elements, while the readout text stays red where SSL's is
-    // white. Frank: the strip above the fader is to show "ausschliesslich das
-    // von ssl". So the text and colour writes wait for the channel view; the
-    // SEL / Solo / Cut LEDs below keep following the fader's track. Coming
-    // back repaints everything: the statics still describe the pre-meter state.
-    static bool sPlaneHeld = false;
-    // ⛔ EIN SIDE-CAR IST NICHT DIE METER-ANSICHT. Jeder Textschreibvorgang
-    // unten haengt an `planeWrite` (also `!meterView`), und `g_uf1MeterView` bleibt stehen, wenn man
-    // aus der Meter-Ansicht in ein Side-Car geht — dann blieb die Zone ueber dem
-    // Fader leer (Frank 21.09.: "kanalname wird nicht angezeigt auf dem display
-    // oberhalb des faders"). Solange ein Side-Car den Schirm haelt, ist "sind
-    // wir in der Meter-Ansicht" die falsche Frage: die Antwort ist "nein, ein
-    // Side-Car ist es".
-    const bool meterView = g_uf1MeterView.load()
-                        && g_uf1SideCar.load() == Uf1SideCar::None;
-    if (meterView) sPlaneHeld = true;
-    else if (sPlaneHeld) { sPlaneHeld = false; changed = true; }
-    // ⇨ ABER EINE NEUE SPUR IST EIN NEUER STRIP. Die Sperre oben haelt die
-    // Ebene still, solange dieselbe Spur auf dem Fader liegt: SSL schreibt dort
-    // nichts, und wir sollen nicht alle paar Sekunden nachschreiben. Wechselt
-    // aber die Spur, stand oben weiter der Name der alten, waehrend Pegel-LEDs
-    // und SEL schon der neuen folgten (Frank 09.11.2026: "track name on the
-    // small screen doesn't update when changing tracks"). Darum malt ein
-    // Spurwechsel in der Meter-Ansicht den Strip EINMAL ganz neu, wie in der
-    // Kanal-Ansicht; dazwischen bleibt es still, bis auf Name und dB, die
-    // jeder echten Aenderung folgen (unten). Als Extender zaehlt der neunte
-    // Send mit, denn dessen Ziel steht dann im Namen.
-    static MediaTrack* sStripTr      = nullptr;
-    static MediaTrack* sStripSendTr  = nullptr;
-    static int         sStripSendCat = kRouteNone;
-    static int         sStripSendIdx = -1;
-    MediaTrack* const stripSendTr  = sendOverride ? sendOverride->track        : nullptr;
-    const int         stripSendCat = sendOverride ? sendOverride->sendCategory : kRouteNone;
-    const int         stripSendIdx = sendOverride ? sendOverride->sendIndex    : -1;
-    const bool stripMoved = tr != sStripTr || stripSendTr != sStripSendTr
-                         || stripSendCat != sStripSendCat || stripSendIdx != sStripSendIdx;
-    sStripTr = tr; sStripSendTr = stripSendTr;
-    sStripSendCat = stripSendCat; sStripSendIdx = stripSendIdx;
-    if (meterView && stripMoved) changed = true;
-    const bool planeWrite = !meterView || stripMoved;
+    // ⛔ DER FADER UND SEIN KLEINES DISPLAY LAUFEN IN DER METER-ANSICHT WEITER,
+    // ALS GAEBE ES SIE NICHT. Die Meter-Ansicht gehoert der rechten Haelfte
+    // (grosses Display), der Fader samt Strip der linken (Panelhaelften-Regel;
+    // Frank 09.11.2026: "Meter view ist ja rechte seite der surface, fader linke
+    // seite"). Von 11.09. (fcfcfed8) bis 09.11. sperrte die Meter-Ansicht diese
+    // Ebene, damit der Draht SSL 360 gleicht; dann standen Name, dB, Pan,
+    // Kanalnummer und Farbe auf der Spur von vor dem Wechsel. Hier darf darum
+    // KEIN Meter-View-Gate mehr hin. Die Ebene folgt `changed` und den
+    // Inhaltsvergleichen, genau wie in der Kanal-Ansicht.
 
     // UF1 Extender send fader (Step 4): the strip's NAME + dB read out the 9th
     // SEND, not tr. Name = the send's dest / hw-out (routeName_ — ground truth),
@@ -35529,11 +35492,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     }
     if (sendZone) name = ovName;   // Extender: the 9th send's dest, not the track
     if (faderDb && !faderDb->name.empty()) name = faderDb->name;
-    // ⇨ Name und dB laufen in der Meter-Ansicht MIT (Frank 09.11.2026: "ja,
-    // beides mitlaufen lassen"): geschrieben wird nur, wenn sich der Inhalt
-    // aendert, nie auf einen der vielen `changed`-Anlaesse hin. Die uebrigen
-    // Zellen bleiben hinter `planeWrite`.
-    if ((planeWrite && changed) || name != sName) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
+    if (changed || name != sName) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
 
     // Output dB (0x000c): 0x00 + value left-justified, NUL-padded to 6, + 2-byte
     // unit. The unit is OURS here too — the Hue screen already sends spaces in
@@ -35546,7 +35505,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     if (sendZone) dbv = ovDb;      // Extender: the 9th send's EFFECTIVE level
     if (faderDb && faderDb->set) { dbv = faderDb->value; dbu = faderDb->unit; }
     static std::string sDbU = "dB";
-    if ((planeWrite && changed) || dbv != sDb || dbu != sDbU) {   // laeuft mit, s. Name
+    if (changed || dbv != sDb || dbu != sDbU) {
         sDb = dbv; sDbU = dbu;
         std::vector<uint8_t> p;
         p.push_back(0x00);
@@ -35653,7 +35612,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
             barCentre = 0x00;   // unipolar, no centre detent
         }
     }
-    if (planeWrite && (changed || valLine != sValLine)) { sValLine = valLine; sendZoneText(uf1::scr::kValueLine, valLine); }
+    if (changed || valLine != sValLine) { sValLine = valLine; sendZoneText(uf1::scr::kValueLine, valLine); }
     // The bar's STYLE, which the init replay leaves at 0x03 = "off". Nothing
     // corrected it afterwards, so every position we sent to the bar below drew
     // nothing at all — not the Pan bar, not a Sticky Pot, not the preamp gain
@@ -35668,7 +35627,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     {
         static uint8_t sBarStyle = 0;
         constexpr uint8_t kStylePointer = 0x01;
-        if (planeWrite && (changed || sBarStyle != kStylePointer)) {
+        if (changed || sBarStyle != kStylePointer) {
             sBarStyle = kStylePointer;
             g_uf1_dev->send(uf1::buildScreen(
                 uf1::scr::kBarStyle,
@@ -35677,7 +35636,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         }
     }
     const int barKey = barPos * 2 + (barCentre ? 1 : 0);
-    if (planeWrite && (changed || barKey != sBarKey)) {
+    if (changed || barKey != sBarKey) {
         sBarKey = barKey;
         const std::vector<uint8_t> pb = { static_cast<uint8_t>(barPos), barCentre };
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVPotReadoutBar, pb));
@@ -35692,7 +35651,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     const int idx = numTr ? static_cast<int>(GetMediaTrackInfo_Value(numTr, "IP_TRACKNUMBER"))
                           : 0;
     const std::string ch = idx > 0 ? std::to_string(idx) : std::string();
-    if (planeWrite && (changed || ch != sCh)) { sCh = ch; sendZoneText(uf1::scr::kChNumber, ch); }
+    if (changed || ch != sCh) { sCh = ch; sendZoneText(uf1::scr::kChNumber, ch); }
 
     // Track colour: SEL / track-colour element 0x07 (FF38 GRB) + the fader colour
     // BAR (0x0018, palette index), gated by the 0x0006 "channel populated" flag.
@@ -35798,18 +35757,11 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         // main thread, so our timer never ran while the value was set.
         const std::array<uint8_t, 1> barIdx{
             (swatch >= 0) ? uint8_t(swatch) : uf8::quantize(rgb)};   // BAR = TRACK colour (always)
-        // ⚠ THE SWATCH PROBE PAINTS IN EVERY VIEW. Otherwise it answers only
-        // for someone who already stands in the channel view, and the first
-        // question it got was "where do I see the colours?" — from the Meter
-        // screen, where this gate had swallowed it silently.
-        // ⛔ AND kChActive GOES WITH IT. The header says so in one line — it is
-        // the "channel populated" flag and it GATES the colour bar. Sending the
-        // colour without it paints nothing, which is the other half of why the
-        // probe showed a black strip.
-        if (planeWrite || swatch >= 0) {
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive, active));
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
-        }
+        // ⛔ kChActive GOES WITH THE COLOUR. The header says so in one line — it
+        // is the "channel populated" flag and it GATES the colour bar. Sending
+        // the colour without it paints nothing.
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive, active));
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
         // Self-labelling: the index sits in the channel name, right beside the
         // colour, so nothing has to be counted or remembered and no dialog has
         // to be open for it to be readable.
