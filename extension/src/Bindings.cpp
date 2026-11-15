@@ -8897,6 +8897,11 @@ const char* builtinCategory(const std::string& n)
     if (n.rfind("rme_", 0) == 0)
         return "RME";
 
+    // The computer's media keys and volume (orc/OrcMedia.h). Only ORC registers
+    // them, so only ORC's window lists them.
+    if (n.rfind("media_", 0) == 0)
+        return "Media";
+
     return "";
 }
 
@@ -9447,6 +9452,19 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "LEDs and displays together, one step brighter." },
     { "brightness_both_down",
       "LEDs and displays together, one step dimmer." },
+    { "media_play_pause",
+      "The computer's play/pause key: starts or stops whatever plays, "
+      "Spotify, Music or a browser." },
+    { "media_next",
+      "The computer's next-track key." },
+    { "media_previous",
+      "The computer's previous-track key." },
+    { "media_volume_up",
+      "The computer's volume-up key." },
+    { "media_volume_down",
+      "The computer's volume-down key." },
+    { "media_mute",
+      "The computer's mute key." },
     { "sleep_now",
       "Darkens every connected surface at once. Press again, or touch "
       "anything on any surface, to bring them back; that first press or "
@@ -9902,6 +9920,12 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "marker_overlay_toggle", "Nav Mode" },
     { "master_pin_strip1", "Master L" },
     { "master_pin_strip8", "Master R" },
+    { "media_mute", "Sys Mute" },
+    { "media_next", "Next" },
+    { "media_play_pause", "Play" },
+    { "media_previous", "Prev" },
+    { "media_volume_down", "Vol -" },
+    { "media_volume_up", "Vol +" },
     { "mixer_toggle", "Settings" },
     { "mod_cmd", "Cmd" },
     { "mod_ctrl", "Ctrl" },
@@ -10133,7 +10157,7 @@ const std::vector<const char*>& builtinCategoryOrder()
         "Bank / Page", "Automation", "Zoom", "Sends / Receives",
         "Selection Sets", "Parameter Groups", "Tracks", "Master",
         "Brightness", "Modifiers", "FX Param", "Sticky Pot", "Hue", "DynaMount", "OBS",
-        "RME",
+        "RME", "Media",
     };
     return kCats;
 }

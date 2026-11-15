@@ -3,6 +3,8 @@
 
 #include "OrcConfig.h"
 #include "OrcLight.h"
+#include "OrcActions.h"
+#include "OrcMedia.h"
 #include "OrcHandover.h"
 #include "OrcKeyboard.h"
 #include "OrcModes.h"
@@ -96,6 +98,36 @@ void dumpModel(const rme::State& st)
     std::fflush(stdout);
 }
 
+// ⇨ PLAY, FFW AND RWD ON THE MEDIA KEYS FROM THE FACTORY (Frank 15.11.2026): next
+// and previous track on FFW and RWD, Stop stays as it was. Only over the factory
+// layer orc.json inherited from Rea-Sixty, as Uf8Surface::seedUserKeys does: an
+// empty key or one on something ORC runs is the user's choice. Rea-Sixty's
+// side-car leaves these keys to REAPER (bnd::orcKeySlot), so with REAPER up
+// they are REAPER's transport.
+void seedTransportKeys()
+{
+    namespace bnd = uf8::bindings;
+    const struct { std::uint8_t key; const char* action; } kSeed[] = {
+        { ::uf1::btn::kPlay, "media_play_pause" },
+        { ::uf1::btn::kFfw,  "media_next" },
+        { ::uf1::btn::kRwd,  "media_previous" },
+    };
+    const int plain = static_cast<int>(bnd::Modifier::Plain);
+    for (const auto& k : kSeed) {
+        const bnd::ButtonId id = bnd::fromUf1DeviceId(k.key);
+        for (int layer = 0; layer < 3; ++layer) {
+            bnd::Binding bd = bnd::getBinding(layer, id);
+            bnd::ActionSlot& sl = bd.shortPress[plain];
+            if (bnd::slotIsEmpty(sl) || orc::runsSlot(bd, plain)) continue;
+            sl = bnd::ActionSlot{};
+            sl.type   = bnd::ActionType::Builtin;
+            sl.action = k.action;
+            bd.label.clear();
+            bnd::setBinding(layer, id, bd);
+        }
+    }
+}
+
 // ⇨ NO GATHERER HERE ANY MORE. Until 2026-09-25 ORC built its own view of the
 // mixer for the painter (viewFor / stripViewFor), from memory, and it showed
 // no pot labels, no colour bars and text in the seven-segment field. It paints
@@ -152,6 +184,12 @@ void Surface::onEvent_(const ::uf1::InputEvent& ev)
                 uf8::bindings::dispatch(b, ev.pressed);
             break;
         case ::uf1::InputKind::EncoderRotate:
+            // ⇨ THE JOG ON THE SYSTEM VOLUME (OrcMedia.h): ORC's alone. The shared
+            // input path knows TotalMix only and would do nothing with it.
+            if (ev.id == ::uf1::enc::kJog && media::jogIsSystem(cfg.jogTarget)) {
+                media::stepSystemVolume(ev.delta * media::kJogSystemStep * host_.knobScale());
+                break;
+            }
             rmei::encoder(in_, host_, st, cfg, ev.id, ev.delta, w);
             break;
         case ::uf1::InputKind::FaderTouch:
@@ -246,6 +284,9 @@ void Surface::start()
         m.setConfig(c);
     };
     orc::registerBrightnessBuiltins(stepLight);
+    // ⇨ THE MEDIA KEYS AND THE SYSTEM VOLUME (OrcMedia.h, Frank 15.11.2026).
+    media::registerBuiltins(media::press);
+    seedTransportKeys();
     // Sleep on the UF8's QUICK 1 from the factory (Frank 29.10.2026).
     Uf8Surface::seedUserKeys();
 
@@ -342,10 +383,12 @@ void Surface::loop_()
     // ⇨ THE KEYS THAT PASS THROUGH (RmeInput::passesThrough). Every other key's
     // lamp the shared painter sends (RmeFace::keyLamps). Frank 30.09.2026:
     //   SHIFT      as before, from orc.json: bound = dim, on = lit (fine steps).
-    //   transport  lit only when ORC runs it: a TotalMix builtin (orcKeySlot, the
-    //              rule Rea-Sixty's side-car asks too), in the colours set in
-    //              ORC, active when the action is on. A REAPER action from the
-    //              inherited factory layer does nothing here, so dark.
+    //   transport  lit only when ORC runs it: a builtin ORC registered (runsSlot,
+    //              the UF8's rule too; TotalMix, Sleep, brightness, media keys
+    //              since 15.11.2026, before that only rme_ through orcKeySlot),
+    //              in the colours set in ORC, active when the action is on. A
+    //              REAPER action from the inherited factory layer does nothing
+    //              here, so dark.
     //   360        opens the settings window (onEvent_), lit while it shows, else dim.
     //   CYCLE, CLICK  nothing in ORC for now, dark.
     std::array<int, 9> ptCache{};
@@ -378,7 +421,7 @@ void Surface::loop_()
                        : bnd::bindingHasActiveSlot(bd) ? rmef::Lamp::Lit : rmef::Lamp::Dim;
                 continue;
             }
-            const bnd::ActionSlot* slot = bnd::orcKeySlot(bd, mod);
+            const bnd::ActionSlot* slot = orc::runsSlot(bd, mod);
             if (!slot) continue;
             const bool on = bnd::bindingHasActiveSlotForSet(bd, mod);
             const std::uint32_t rgb = uf1sk::bindingLedColour(bd, *slot, on);

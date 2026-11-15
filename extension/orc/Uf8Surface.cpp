@@ -1,6 +1,8 @@
 #include "Uf8Surface.h"
 
 #include "Bindings.h"
+#include "OrcActions.h"
+#include "OrcMedia.h"
 #include "Brightness.h"
 #include "DynaMountManager.h"
 #include "HueManager.h"
@@ -81,16 +83,11 @@ constexpr UserKey kUserKeys[Uf8Surface::kUserKeyCount] = {
     { kSelAuto, uf8::Uf8GlobalLed::Auto },
 };
 
-// What ORC can run: a builtin it registered (TotalMix, sleep, the modifiers).
-// Anything else on these keys is the factory layer orc.json inherited from
-// Rea-Sixty (domain_cs, the encoder modes ...) and does nothing here.
+// What ORC can run: a builtin it registered (TotalMix, sleep, the modifiers, the
+// media keys). The one rule, shared with the UF1's transport lamps (OrcActions.h).
 const uf8::bindings::ActionSlot* orcSlot(const uf8::bindings::Binding& bd, int mod)
 {
-    namespace bnd = uf8::bindings;
-    if (mod < 0 || mod >= bnd::kModifierCount) return nullptr;
-    const bnd::ActionSlot& sl = bd.shortPress[mod];
-    if (sl.type != bnd::ActionType::Builtin || !bnd::builtinRegistered(sl.action)) return nullptr;
-    return &sl;
+    return orc::runsSlot(bd, mod);
 }
 
 // The colour bar's palette index for an RGB, as ColorSync does it.
@@ -581,6 +578,11 @@ void Uf8Surface::onFrame_(const uf8frames::Frame& f)
         // The channel encoder is Main in every mode: monitor volume never hides
         // behind a light.
         if (pot == kChannelEncoder) {
+            // The jog wheel's target, the system volume too (OrcMedia.h).
+            if (media::jogIsSystem(cfg.jogTarget)) {
+                media::stepSystemVolume(delta * media::kJogSystemStep * scale_());
+                return;
+            }
             send_(u8s::mainVolume(st, in_, side_, cfg, delta, scale_()));
             return;
         }

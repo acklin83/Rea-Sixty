@@ -28,7 +28,8 @@ def registered_names(main_cpp: str) -> set:
     # selection modes, UF1 views and the FX-param pair never call it directly.
     names = set()
     for fn in ("registerBuiltin", "registerSelectionModeToggle",
-               "regUf1View", "registerFxParamStep", "regRmeCr", "regDurec", "regRmeRow"):
+               "regUf1View", "registerFxParamStep", "regRmeCr", "regDurec", "regRmeRow",
+               "regMediaKey"):
         names.update(re.findall(fn + r'\(\s*"([a-z0-9_]+)"', main_cpp))
 
     # Loop-built families: snprintf(buf, ..., "name_%d", i) then
@@ -123,8 +124,10 @@ def main() -> int:
     # ModeBuiltins.cpp since 2026-10-29: the Hue, DynaMount and OBS actions,
     # registered by both programs.
     bindings = (SRC / "Bindings.cpp").read_text()
+    # orc/OrcMedia.h since 2026-11-15: the media keys, which only ORC registers.
     main_cpp = "\n".join((SRC / f).read_text()
-                         for f in ("main.cpp", "RmeBuiltins.cpp", "ModeBuiltins.cpp")) + "\n" + bindings
+                         for f in ("main.cpp", "RmeBuiltins.cpp", "ModeBuiltins.cpp",
+                                   "../orc/OrcMedia.h")) + "\n" + bindings
 
     names = registered_names(main_cpp)
     exact, prefixes = doc_tables(bindings)

@@ -155,6 +155,7 @@ function choiceOpts(list,cur){
   return o+(open?'</optgroup>':'');
 }
 const targetSel=(m,cur)=>sel(m,choiceOpts(S.targets,cur),cur);
+const jogSel=(m,cur)=>sel(m,choiceOpts(S.jogTargets,cur),cur);
 const outputSel=(m,cur,dis)=>sel(m,choiceOpts(S.outputs,cur),cur,dis);
 const actionSel=(m,cur,dis)=>sel(m,opt('','None',cur)+S.actions.map(a=>opt(a.a,a.l,cur)).join(''),cur,dis);
 const swatch=c=>c?'<span class="sw" style="background:'+esc(c)+'"></span>':'<span class="sw none"></span>';
@@ -187,7 +188,7 @@ const DRAW={
     const bank=b=>table(['Pot','Target','Push'],[0,1,2,3].map(i=>{const p=u.pots[b*4+i];
       return '<td class="k">Pot '+(i+1)+'</td><td>'+targetSel({t:'pot',i:b*4+i,f:'target'},p.target)+'</td><td style="width:120px">'+sel({t:'pot',i:b*4+i,f:'push'},S.pushes.map(x=>opt(x.v,x.l,p.push)).join(''),S.pushes.some(x=>x.v===p.push)?p.push:null)+'</td>'}));
     return '<div class="cards">'
-    +card('UF1',rows([row('Use the UF1',onoff({t:'rme',f:'uf1Enabled'},u.use)),row('Jog wheel',targetSel({t:'rme',f:'jogTarget'},u.jogTarget)),row('Jog step',unit(rme('jogStepDb',u.jogStepDb,'class="num"'),'dB')),row('Pot step',unit(rme('vpotStepDb',u.vpotStepDb,'class="num"'),'dB')),row('V-Pot speed',unit(rme('uf1PotSpeed',u.speed,'class="num"'),'x'))]))
+    +card('UF1',rows([row('Use the UF1',onoff({t:'rme',f:'uf1Enabled'},u.use)),row('Jog wheel',jogSel({t:'rme',f:'jogTarget'},u.jogTarget)),row('Jog step',unit(rme('jogStepDb',u.jogStepDb,'class="num"'),'dB')),row('Pot step',unit(rme('vpotStepDb',u.vpotStepDb,'class="num"'),'dB')),row('V-Pot speed',unit(rme('uf1PotSpeed',u.speed,'class="num"'),'x'))]))
     +card('Transport',table(['Key','Action','Active','Inactive'],S.keys.slice(0,S.transportCount).map((k,i)=>keyRow(k,i))))
     +card('Bank 1',bank(0))+card('Bank 2',bank(1))
     +'</div>'},

@@ -5,7 +5,9 @@
 #include "HueManager.h"
 #include "JsonTree.h"
 #include "ObsManager.h"
+#include "OrcActions.h"
 #include "OrcConfig.h"
+#include "OrcMedia.h"
 #include "OrcModes.h"
 #include "Palette.h"
 #include "PhonesServer.h"
@@ -149,6 +151,16 @@ std::vector<Choice> targetChoices(const rme::State& st)
             out.push_back({ spec, rmeu::displayName(st, row, ch) });
         }
     }
+    return out;
+}
+
+// The jog wheel's: the same, and the computer's own volume right after None
+// (OrcMedia.h, Frank 15.11.2026). Only the jog and the UF8's channel encoder,
+// which follows it, know that target.
+std::vector<Choice> jogChoices(const rme::State& st)
+{
+    auto out = targetChoices(st);
+    out.insert(out.begin() + 1, { orc::media::kJogSystemSpec, "System volume" });
     return out;
 }
 
@@ -677,11 +689,10 @@ void applyMoreme(const std::string& t, const wdl_json_element* m, Context& c)
 std::vector<std::string> rmeActions()
 {
     std::vector<std::string> out;
+    // The TotalMix builtins and the ones ORC registers itself (Surface::start):
+    // Sleep, the brightness steps, the media keys. One rule with the manual's dump.
     for (const auto& n : bnd::builtinNames())
-        // Plus Sleep and the brightness steps (category Brightness), which ORC
-        // registers itself (Surface::start).
-        if (std::string(bnd::builtinCategory(n)) == "RME"
-            || std::string(bnd::builtinCategory(n)) == "Brightness") out.push_back(n);
+        if (orc::offersAction(n)) out.push_back(n);
     std::sort(out.begin(), out.end(), [](const std::string& a, const std::string& b) {
         return bnd::builtinDisplayName(a) < bnd::builtinDisplayName(b);
     });
@@ -805,6 +816,7 @@ std::string stateJson(const Context& c)
     const auto cfg = mgr.config();
     const auto st  = mgr.snapshot();
     const auto targets = targetChoices(st);
+    const auto jogs    = jogChoices(st);
     const auto outs    = outputChoices(st);
     const auto actions = rmeActions();
 
@@ -833,7 +845,8 @@ std::string stateJson(const Context& c)
 #endif
        + "}";
 
-    o += ",\"targets\":" + choicesJson(targets) + ",\"outputs\":" + choicesJson(outs);
+    o += ",\"targets\":" + choicesJson(targets) + ",\"jogTargets\":" + choicesJson(jogs)
+       + ",\"outputs\":" + choicesJson(outs);
     o += ",\"pushes\":" + arr(kPushes, [](const PushChoice& p) {
         return "{\"v\":" + jstr(p.value) + ",\"l\":" + jstr(p.title) + "}";
     });
@@ -848,7 +861,7 @@ std::string stateJson(const Context& c)
              return "{\"target\":" + specSelected(st, cfg.vpots[i].target, targets)
                   + ",\"push\":" + jstr(cfg.vpots[i].push) + "}";
          })
-       + ",\"jogTarget\":" + specSelected(st, cfg.jogTarget, targets)
+       + ",\"jogTarget\":" + specSelected(st, cfg.jogTarget, jogs)
        + ",\"jogStepDb\":" + jstr(jnum(cfg.jogStepDb))
        + ",\"vpotStepDb\":" + jstr(jnum(cfg.vpotStepDb))
        + ",\"speed\":" + jstr(jnum(cfg.uf1PotSpeed)) + "}";

@@ -114,6 +114,7 @@ svg a:hover .knob, svg a:focus .knob { fill: var(--accent); }
     <li><a href="#softkeys">Soft-key banks</a></li>
     <li class="sub"><a href="#actions">Actions</a></li>
     <li><a href="#settings">The settings window</a></li>
+    <li class="sub"><a href="#media">Media keys</a></li>
     <li><a href="#trouble">When something is off</a></li>
     <li><a href="#files">Files</a></li>
     <li><a href="#licences">Licences</a></li>
@@ -205,9 +206,9 @@ calls an unknown network public. Uninstalling removes the rule. Your settings in
 <h2>ORC and Rea-Sixty</h2>
 <p>Rea-Sixty, my REAPER extension for SSL surfaces, shows the same TotalMix view on the UF1 inside
 REAPER: hold SHIFT, press MODE, and pick RME. It runs the code ORC runs, so the surface works as
-this page describes, with two differences: MODE opens REAPER's mode menu, and a transport key runs
-the action you gave it in ORC, its lamp in ORC's colours, or else stays REAPER's transport, lamp
-included.</p>
+this page describes, with two differences: MODE opens REAPER's mode menu, and a transport key with a
+TotalMix action from ORC runs it, its lamp in ORC's colours. Every other transport key is REAPER's
+transport, lamp included, also one that plays the computer's media in ORC.</p>
 <p>Two Rea-Sixty built-ins put this on any key or a Stream Deck button: <em>UF1 Mode: RME</em>
 switches the UF1 to this view and back, <em>RME: Ask TotalMix again</em> does what the button of the
 same name on the General page does.</p>
@@ -465,15 +466,18 @@ With the channel pages open the view stays open on the new row's channel.</td></
 <h3>Jog wheel</h3>
 <p>The level of one fixed target, out of the box Main, in steps of {{jogStepDb}} dB. The time
 display shows that level. Target and step are on the settings page
-<a href="#set-controls">UF1</a>.</p>
+<a href="#set-controls">UF1</a>. The target can also be <em>System volume</em>, the computer's own
+volume, 1 % per step. The time display then stays empty.</p>
 </div>
 
 <div class="ctl" id="c-transport" data-btn="kRwd kFfw kStop kPlay kRec">
 <h3>Transport keys</h3>
-<p>Empty out of the box. The settings page <a href="#set-controls">UF1</a> puts any of the
-<a href="#actions">actions</a> on them, the DuRec recorder for example, and sets each key's lamp: its
-<em>Active</em> colour while the action is on, its <em>Inactive</em> colour otherwise. A key with no
-action stays dark.</p>
+<p>Out of the box PLAY, FFW and RWD are the computer's play/pause, next track and previous track,
+for whatever plays: Spotify, Music, a browser. STOP and REC are empty. The settings page
+<a href="#set-controls">UF1</a> puts any of the <a href="#actions">actions</a> on them, the DuRec
+recorder for example, and sets each key's lamp: its <em>Active</em> colour while the action is on,
+its <em>Inactive</em> colour otherwise. A key with no action stays dark. When REAPER starts, the
+transport keys are REAPER's again (<a href="#reasixty">ORC and Rea-Sixty</a>).</p>
 </div>
 
 <div class="ctl" id="c-shift" data-btn="kShift">
@@ -976,7 +980,7 @@ of the normal step. In TotalMix, FINE and a SEND/PLUG-IN key or a key of a submi
 <div class="ctl" id="u-channel" data-uf8="kChannelEncoder kChannelPush">
 <h3>CHANNEL encoder</h3>
 <p>In every mode the level of the jog wheel's target, out of the box Main, in steps of
-{{jogStepDb}} dB, as the UF1's jog wheel. Target and step are on the settings page
+{{jogStepDb}} dB, as the UF1's jog wheel, or the computer's volume with <em>System volume</em>. Target and step are on the settings page
 <a href="#set-controls">UF1</a>. In TotalMix, Main stands on strip 8 for two seconds while
 you turn (<a href="#set-uf8">Show Main volume on change</a>). A push opens and closes the
 <a href="#uf8-chanview">channel view</a>, as PLUG-IN does and as the push opens the channel pages on the UF1.</p>
@@ -1243,6 +1247,12 @@ key; press it again, or touch anything, to wake them.</td></tr>
 <p>How bright the LEDs and the displays are is set from a key, with the six <em>Brightness</em>
 <a href="#actions">actions</a>: LEDs, displays (LCDs) or both, one step brighter or darker, five
 steps from dark to full. Both surfaces follow, and ORC keeps the steps.</p>
+<h3 id="media">Media keys</h3>
+<p>Six <em>Media</em> <a href="#actions">actions</a> press the keys of the computer's keyboard:
+play/pause, next track, previous track, volume up, volume down and mute. The player that plays at the
+time gets them. On the Mac the first press asks for <em>Accessibility</em>: allow ORC in System
+Settings, Privacy &amp; Security, Accessibility, then the keys work. The volume keys and
+<em>System volume</em> on the jog wheel do nothing when the output in use has no volume of its own.</p>
 <h3 id="cue">Cue</h3>
 <p>TotalMix cues one hardware output at a time and sends it to the output set under Assign, Cue to in
 its control room. ORC switches the Cue, the destination stays in TotalMix. SOLO on an output is its Cue.
@@ -1255,7 +1265,7 @@ Shift on the Mac's keyboard. The same press on the cued output switches it off. 
 <tr><th>Pot, Target, Push</th><td>The eight pot targets, bank 1 and bank 2: a control-room role
 (Main, Main B, Phones 1 to 4, Talkback) or any channel TotalMix shows this remote. The push: Submix,
 Select (put it on the fader), Mute or Nothing.</td></tr>
-<tr><th>Jog wheel</th><td>The jog wheel's target.</td></tr>
+<tr><th>Jog wheel</th><td>The jog wheel's target, one of the pot targets or <em>System volume</em>.</td></tr>
 <tr><th>Jog step</th><td>dB per step of the jog wheel.</td></tr>
 <tr><th>Pot step</th><td>dB per step of the four pots in the overview.</td></tr>
 <tr><th>V-Pot speed</th><td>How far a turn of the four pots and of the pot above the fader goes.

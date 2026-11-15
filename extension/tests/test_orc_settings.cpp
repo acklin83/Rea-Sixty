@@ -8,7 +8,9 @@
 
 #include "OrcSock.h"
 
+#include "../orc/OrcActions.h"
 #include "../orc/OrcLight.h"
+#include "../orc/OrcMedia.h"
 #include "Bindings.h"
 #include "BindingsHost.h"
 #include "DynaMountManager.h"
@@ -292,6 +294,40 @@ static void testKeys()
     bnd::setBinding(layer, bnd::ButtonId::Uf1Rwd, bd);
     EXPECT(has(set::stateJson(c), R"("keys":[{"n":"Rewind","action":"")"));
     set::apply(R"({"t":"keyAction","k":99,"v":"sleep_now"})", c);
+}
+
+// ⇨ THE MEDIA KEYS (orc/OrcMedia.h, Frank 15.11.2026): on the page, on a key, and
+// the jog wheel on the system volume, which only the jog's list offers.
+static void testMediaKeys()
+{
+    set::Context c;
+    const std::string js = set::stateJson(c);
+    for (const char* n : { "media_play_pause", "media_next", "media_previous",
+                           "media_volume_up", "media_volume_down", "media_mute" }) {
+        EXPECT(std::string(bnd::builtinCategory(n)) == "Media");
+        EXPECT(has(js, std::string("{\"a\":\"") + n + "\""));
+        EXPECT(orc::offersAction(n));
+    }
+    EXPECT(!orc::offersAction("some_reaper_thing"));
+
+    const int layer = bnd::getActiveLayer();
+    set::apply(R"({"t":"keyAction","k":0,"v":"media_previous"})", c);
+    const bnd::Binding bd = bnd::getBinding(layer, bnd::ButtonId::Uf1Rwd);
+    EXPECT(bd.shortPress[0].action == "media_previous");
+    EXPECT(orc::runsSlot(bd, 0) != nullptr);
+    // ⛔ Rea-Sixty's side-car must leave it to REAPER: orcKeySlot stays at rme_.
+    EXPECT(bnd::orcKeySlot(bd, 0) == nullptr);
+    EXPECT(has(set::stateJson(c), R"("keys":[{"n":"Rewind","action":"media_previous")"));
+
+    // The jog's list has the system volume; the pots' list does not.
+    EXPECT(has(js, R"("jogTargets":[{"s":"","l":"None"},{"s":"system","l":"System volume"})"));
+    EXPECT(has(js, R"("targets":[{"s":"","l":"None"},{"s":"main")"));
+    set::apply(R"({"t":"rme","f":"jogTarget","v":"system"})", c);
+    EXPECT(orc::media::jogIsSystem(rme::manager().config().jogTarget));
+    EXPECT(has(set::stateJson(c), R"("jogTarget":"system")"));
+    set::apply(R"({"t":"rme","f":"jogTarget","v":"main"})", c);
+    EXPECT(has(set::stateJson(c), R"("jogTarget":"main")"));
+    set::apply(R"({"t":"keyAction","k":0,"v":""})", c);
 }
 
 static void testSoftKeys()
@@ -731,10 +767,13 @@ int main()
         [](bool, bool, int) {}, [](int) { return false; }, "Sleep the surface now", false });
     bnd::setBuiltinKind("sleep_now", bnd::BuiltinKind::Switch);
     orc::registerBrightnessBuiltins({});
+    // And the media keys (orc/OrcMedia.h), with no press behind them.
+    orc::media::registerBuiltins({});
 
     testAllowed();
     testRmeEdits();
     testKeys();
+    testMediaKeys();
     testSoftKeys();
     testModes();
     testRmeJsonWhole();

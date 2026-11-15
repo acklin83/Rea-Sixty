@@ -8,6 +8,7 @@
 // Usage: HOME=<scratch> demo <resources/settings> <seconds>. Writes url.txt to HOME.
 
 #include "../orc/OrcLight.h"
+#include "../orc/OrcMedia.h"
 #include "Bindings.h"
 #include "BindingsHost.h"
 #include "OrcConfig.h"
@@ -125,6 +126,8 @@ int main(int argc, char** argv)
         [](bool, bool, int) {}, [](int) { return false; }, "Sleep the surface now", false });
     bnd::setBuiltinKind("sleep_now", bnd::BuiltinKind::Switch);
     orc::registerBrightnessBuiltins({});
+    // And the media keys (orc/OrcMedia.h), with no press behind them.
+    orc::media::registerBuiltins({});
 
     rme::Config c;
     c.enabled  = true;

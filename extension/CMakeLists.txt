@@ -1314,6 +1314,8 @@ if(APPLE)
         orc/OrcConfig.cpp
         orc/OrcMenu.cpp
         orc/OrcApp.mm
+        # Media keys and the system volume (OrcMedia.h, docs/orc-media-keys-plan.md).
+        orc/OrcMediaMac.mm
         orc/OrcLogo.cpp
         # ORC MoreMe, the headphone mixer in the browser (docs/orc-phones-plan.md):
         # the mixer's logic, the WebSocket codec, the server and its page.
@@ -1347,6 +1349,7 @@ if(APPLE)
     set_source_files_properties(
         orc/OrcApp.mm
         orc/OrcWebWindow.mm
+        orc/OrcMediaMac.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     # WDL only for its JSON parser, which RmeManager reads rme.json with. No
     # REAPER header comes in with it: WDL is a standalone utility library.
@@ -1405,7 +1408,7 @@ if(APPLE)
     target_include_directories(orc PRIVATE "${ORC_LIBUSB_PREFIX}/install/include/libusb-1.0")
     target_link_libraries(orc PRIVATE "${ORC_LIBUSB_DYLIB}" Threads::Threads
         "-framework AppKit" "-framework ServiceManagement" "-framework CoreImage" "-framework WebKit"
-        "-framework UniformTypeIdentifiers")
+        "-framework UniformTypeIdentifiers" "-framework CoreAudio" "-framework AudioToolbox")
     # ⇨ A BUNDLE, because a status item needs one. An unbundled binary can put
     # an item in the menu bar, but it has no Info.plist to carry LSUIElement, no
     # name for the system to show and nothing to sign or notarise later.
@@ -1579,6 +1582,7 @@ if(WIN32 AND ORC_WINDOWS)
         orc/OrcConfig.cpp
         orc/OrcMenu.cpp
         orc/OrcTray.cpp
+        orc/OrcMediaWin.cpp
         orc/OrcWebWindow.cpp
         src/WinUsbDriver.cpp
         "${ORC_QR_DIR}/qrcodegen.cpp"
@@ -1595,7 +1599,7 @@ if(WIN32 AND ORC_WINDOWS)
     target_compile_definitions(orc PRIVATE ORC_VERSION="${MACOSX_BUNDLE_SHORT_VERSION_STRING}")
     target_include_directories(orc PRIVATE "${ORC_QR_DIR}" "${orc_webview2_SOURCE_DIR}/build/native/include")
     target_link_libraries(orc PRIVATE "${orc_webview2_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
-        version shlwapi)
+        version shlwapi ole32)
     # The driver's INF, embedded like in the extension.
     add_dependencies(orc reasixty_winusb_inf_gen)
     target_include_directories(orc PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
