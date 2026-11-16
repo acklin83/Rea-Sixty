@@ -26,3 +26,10 @@ Plan und Entscheide: `docs/orc-media-keys-plan.md`.
 ## Offen
 - ORC nach /Applications (Developer ID) nur auf Franks Wort; ad hoc signiert hält die Freigabe nicht.
 - Rea-Sixty-dylib nicht installiert: Änderung dort nur Tabellen, ohne Wirkung (Rea-Sixty meldet media_ nicht an).
+
+## 16.11.2026: Installation, Messung, Release 1.7.0
+
+- Dev-Build `df33d36c` mit Developer ID nach /Applications (ORC beendet, Anmeldeobjekt blieb).
+- Frank: System volume geht bei ihm nicht. Gemessen per Core-Audio-Abfrage (nur lesen): Fireface UFX+ hat weder virtuelle Hauptlautstärke noch Kanallautstärke. Handbuch-Satz `5bc65110`: bei RME den Jog auf die TotalMix-Ausgabe.
+- ORC 1.7.0 (Build 15, `b794ec99`) released: https://github.com/acklin83/ORC/releases/tag/v1.7.0. App + DMG notarisiert, Windows-Installer aus CI, Handbuch ORC `5608b90`, Website-Knopf `413ad2e4` (private, Deploy durch Frank).
+- Offen: /Applications noch nicht aus dem DMG (ORC lief), Website-Deploy.
