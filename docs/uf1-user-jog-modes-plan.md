@@ -113,6 +113,82 @@ Aktionseditor.
   zurück durch bindings.json, Teiler (5 Rasten bei Teiler 3 = 1 Auslösung, Rest bleibt),
   relative Kodierung (+1, -1, +7, -70 klemmt bei -64) gegen REAPERs `encode_relmode1_extended`.
 
+### H · Der Fader im eigenen Modus
+
+Frank 16.11.: „was ist mit fader integration? für item jog-mode haben wir das ja z.B. auch drin“.
+Grundlage ist Franks Satz vom 25.09., der im Code steht (main.cpp:7279): Jog-Modi sollen „auch
+den Fader mitnehmen können wenn gewünscht (pro Mode)“.
+
+#### Wie „Fader = Item Volume“ heute gebaut ist (gelesen)
+
+- **Schalter:** `g_uf1JogFader[kUf1JogModeCount]` (main.cpp:7283), ExtState `uf1JogFader<m>`,
+  ab Werk aus, geladen main.cpp:61460. Angeboten nur, wo `reasixty_uf1JogModeHasFader` ja sagt,
+  heute nur Items (main.cpp:55233). Im Fenster ein Haken „Fader = Item Volume“
+  (SettingsScreen.cpp:5035).
+- **Drei Ketten im UF1-Kanalmaler** (`uf1PaintChannel_`), das Item-Ziel steht in allen dreien
+  vorne, vor Strip Mode, Send, Sticky Pot, FLIP und Extender (main.cpp:39280, Kommentar „First in
+  all three chains“):
+  1. **Anzeige** (main.cpp:39288-39328): `Uf1FaderDb` mit Wert, Einheit, Name
+     (main.cpp:35382). Ein gesetzter Name ersetzt den Spurnamen in der Zone (main.cpp:35494),
+     ein gesetzter Wert den dB-Wert (main.cpp:35506). Items: dB des ersten Items, ohne Item
+     „no item“.
+  2. **Schreiben** bei Berührung (main.cpp:39341ff): einmal pro neuer Position
+     (`sItemSentPos`), alle gewählten Items um dasselbe dB-Verhältnis. Kein Undo-Schritt, keine
+     Automation (Item-Eigenschaft).
+  3. **Motor** nach dem Loslassen (main.cpp:39450ff): folgt dem ersten Item, ohne Item bleibt er,
+     wo er war (`sLastMotorPos`).
+- **Berührung:** 150 ms entprellt (main.cpp:39121-39124); Motor schlaff beim Greifen
+  (main.cpp:29325-29330). Fader 15 Bit, `kFaderMax = 0x7FFF` (UF1Protocol.h:37). Der Maler läuft
+  im Takt des Kanalmalers, nicht pro USB-Ereignis.
+
+#### Plan: ein Fader-Ziel pro Modus statt eines Hakens
+
+`g_uf1JogFader[m]` (bool) wird `g_uf1JogFaderTarget[m]` (Auswahl), für **alle** Modi gleich
+gebaut. Items' Haken wird dieselbe Auswahl mit „Track“ und „Item volume“; ExtState
+`uf1JogFader2=1` lädt als „Item volume“, damit Franks Einstellung bleibt. Eine Stelle entscheidet,
+was der Fader in diesem Modus fährt; Anzeige, Schreiben und Motor fragen sie, wie heute
+`itemFader`.
+
+Die Ziele, jedes mit Herkunft im Code:
+
+| Ziel | Anzeige | Schreiben | Motor | Automation, Undo | Herkunft |
+|---|---|---|---|---|---|
+| **Track** (Werk) | wie heute | wie heute | wie heute | wie heute | Rest der Kette |
+| **Item volume** | dB erstes Item, „no item“ | alle Items, gleiches dB-Verhältnis | erstes Item | keine, kein Undo | Items heute, unverändert |
+| **Take volume** | dB aktiver Take erstes Item | aktive Takes, gleiches Verhältnis | erster Take | keine, kein Undo | neu, gleiches Muster mit `GetActiveTake` / Take-`D_VOL` |
+| **Last touched parameter** | Wert wie Plug-in ihn formatiert, Name = Parametername | linear 0..1 | liest den Parameter | Touch über `noteFaderFxEdit_` / `endFaderFxEdit_` wie Strip Mode | `applyLastParamStep_` (main.cpp:10620) für das Auffinden, `fromParam` (main.cpp:39290) für die Anzeige |
+| **REAPER action (absolute)** | Prozent, Name = Kurzlabel der Action | `KBD_OnMainActionEx` mit 14 Bit (`val` = obere 7 Bit, `valhw` = untere 7 Bit, relmode 0) | bleibt, wo die Hand ihn liess, pro Modus gemerkt | was die Action tut | SDK reaper_plugin_functions.h:4084-4090 |
+| **MIDI CC** | Wert 0..127 bzw. 0..16383, Name = Name des Controls | `midicc::messagesFor(Kind::Fader, …)`, 7 oder 14 Bit, an den Ausgang wie die CC-Ebene | gemerkter Wert; mit Rückweg wie die CC-Ebene | was das Ziel tut | MidiCcLayer.h:243, Ausgang `midiOutputIndexByName_` (main.cpp:23164) |
+
+Welche Ziele gebaut werden, ist Frage 5. „Track“ und „Item volume“ sind die Pflicht, weil Items
+sie heute hat.
+
+#### Regeln, die dabei gelten
+
+- **Reihenfolge in den drei Ketten:** das Jog-Ziel bleibt vorne, wie Item volume heute. Es
+  schlägt also auch Extender, MASTER, FLIP und Strip Mode. Steht das Ziel auf „Track“, läuft die
+  Kette wie heute.
+- **Linke Hälfte:** „Track“ löst über `uf1FaderTrack_` auf wie bisher. Die anderen Ziele hängen
+  nicht an einer Spur (Items, Takes, zuletzt berührter Parameter, Action, MIDI), daher keine
+  Verletzung der Hälften-Regel; die Zone sagt per Name, was der Fader fährt.
+- **Name in der Zone:** bei allen Zielen ausser „Track“ steht dort, was der Fader fährt (wie
+  „no item“ heute schon), sonst glaubt man, man fahre die Spur. 8 Zeichen.
+- **Kein Ziel da** (kein Item, nichts berührt): Fader bleibt stehen, Name sagt es („no item“,
+  „no param“), Schreiben tut nichts. Gleiches Verhalten wie Item volume heute.
+- **Schreibtakt:** einmal pro neuer Position wie `sItemSentPos`. Für Action und MIDI wichtig, sonst
+  geht pro Malertakt dieselbe Nachricht raus.
+- **Moduswechsel während der Hand auf dem Fader ist:** das neue Ziel bekommt erst beim nächsten
+  Greifen Werte. Sonst springt ein Parameter auf die Faderstellung des alten Ziels. Heute bei
+  Items ungeregelt (prüfen, nicht raten).
+- **ORC-Side-Car, Hue Mode, RME-Seite:** diese Modi übernehmen den Schirm und den Fader vor dem
+  Kanalmaler; das Jog-Ziel gilt dort nicht.
+- **UF8:** unberührt, seine acht Fader bleiben Spuren.
+
+#### Was der Plan nicht tut
+
+Fader-Ziel als Wert für ein Built-in (Built-ins nehmen eine Schrittzahl, keinen Wert), Undo-Schritt
+für Item- und Take-Lautstärke (heute keiner, Frage 6), Fader-Ziele auf dem UF8.
+
 ## Wer fasst diese Werte sonst noch an
 
 - `kUf1JogModeCount`: 29 Stellen in main.cpp. Jede wird gelesen, nicht gezählt; jedes Array
@@ -125,6 +201,11 @@ Aktionseditor.
   sind UF1-Rea-Sixty-Ids und müssen aus ORCs Editor draussen bleiben; der neue Host-Haken ist
   in ORC leer.
 - Rea-Sixtys Side-Car (ORC-Bänke auf dem UF1 bei laufendem REAPER) liest die Jog-Modi nicht.
+- `g_uf1JogFader`: geschrieben main.cpp:55244 und 61462, gelesen main.cpp:39281 und 55239,
+  angeboten über `reasixty_uf1JogModeHasFader` (main.cpp:55233, SettingsScreen.cpp:5035). Alle
+  vier Stellen wechseln auf das Ziel, keine bleibt beim bool.
+- `itemFader` (main.cpp:39280) ist die eine Entscheidung, die Anzeige, Schreiben und Motor teilen.
+  Sie wird zur Zielabfrage; drei getrennte Abfragen wären drei Kopien.
 
 ## Fallen
 
@@ -140,8 +221,8 @@ Aktionseditor.
 
 ## Nicht in diesem Plan
 
-Eigene Encoder-Modi für den UF8 oder UC1 (Frage 4), eigene Anzeige pro Modus, Fader folgt dem
-eigenen Modus, Werksbeispiele.
+Eigene Encoder-Modi für den UF8 oder UC1 (Frage 4), eigene Anzeige pro Modus ausser dem Namen in
+der Fader-Zone, Werksbeispiele.
 
 ## Geprüft und nicht geprüft
 
@@ -149,7 +230,11 @@ Gelesen in dieser Sitzung: alle Stellen mit Datei:Zeile oben, die SDK-Stellen zu
 `KBD_OnMainActionEx` und relmode. Nicht geprüft: ob die Companion-Lua die Jog-Modi selbst
 aufzählt, wie der REAPER-Action-Picker Bereiche filtert, welche REAPER-Actions „(MIDI CC
 relative/mousewheel)“ heissen (nur aus REAPERs Aktionsliste zu sehen), ob relmode 1 bei allen
-relativen Actions dasselbe Tempo ergibt.
+relativen Actions dasselbe Tempo ergibt. Fader: gelesen die drei Ketten im Kanalmaler, Berührung,
+`applyLastParamStep_`, `midicc::messagesFor`, SDK zu absolutem 14-Bit-Wert. Nicht geprüft: ob
+`TrackFX_SetParamNormalized` den „zuletzt berührten“ Parameter umstellt (dann wanderte das Ziel
+unter der Hand), wie der Rückweg der CC-Ebene den Wert liefert, was beim Moduswechsel unter der Hand
+heute passiert, welche REAPER-Actions „(MIDI CC/OSC only)“ einen absoluten Wert nehmen.
 
 ## Fragen an Frank
 
@@ -157,3 +242,9 @@ relativen Actions dasselbe Tempo ergibt.
 2. Beide Arten anbieten (Links/Rechts und eine Aktion mit Richtung), oder nur eine?
 3. SHIFT: eigener Platz mit Rückfall auf „Plain, feiner“, oder immer nur „feiner“?
 4. Nur UF1, oder sollen dieselben Plätze auch als Encoder-Modi auf UF8 und UC1 wählbar sein?
+5. Welche Fader-Ziele: Track und Item volume sind gesetzt. Dazu Take volume, Last touched
+   parameter, REAPER action, MIDI CC: alle, einige, keins?
+6. Item und Take volume über den Fader: ein Undo-Schritt pro Griff (beim Loslassen), oder wie
+   heute ohne Undo?
+7. Fader-Ziel auch für die eingebauten Modi (Playhead, Envelope, Fades …) wählbar, oder nur für
+   Items und die eigenen?
