@@ -1,6 +1,6 @@
 # UF1: eigene Jog-Modi
 
-Stand 16.11.2026, Plan, nichts gebaut. Frank: „einen weg für user-defineable jog-wheel modes“.
+Stand 16.11.2026, Plan, Entscheide am Ende, nichts gebaut. Frank: „einen weg für user-defineable jog-wheel modes“.
 Ein früherer Plan dazu ist weder im Repo noch in der Memory auf dem Mac Studio zu finden.
 
 ## Was es tut
@@ -268,15 +268,20 @@ wandernde „last touched“-Parameter abfängt.
 Nur in REAPER zu sehen, darum offen bis zum Bau: wie gross ein Schritt pro relativer Action ist,
 und dass der Items-Fader beim Moduswechsel unter der Hand wirklich springt (aus dem Code gelesen).
 
-## Fragen an Frank
+## Entscheide (Frank 16.11.2026, je einzeln gefragt)
 
-1. Wie viele Plätze? Vorschlag 4.
-2. Beide Arten anbieten (Links/Rechts und eine Aktion mit Richtung), oder nur eine?
-3. SHIFT: eigener Platz mit Rückfall auf „Plain, feiner“, oder immer nur „feiner“?
-4. Nur UF1, oder sollen dieselben Plätze auch als Encoder-Modi auf UF8 und UC1 wählbar sein?
-5. Welche Fader-Ziele: Track und Item volume sind gesetzt. Dazu Take volume, Last touched
-   parameter, REAPER action, MIDI CC: alle, einige, keins?
-6. Item und Take volume über den Fader: ein Undo-Schritt pro Griff (beim Loslassen), oder wie
-   heute ohne Undo?
-7. Fader-Ziel auch für die eingebauten Modi (Playhead, Envelope, Fades …) wählbar, oder nur für
-   Items und die eigenen?
+1. **Plätze:** 4, `User1` bis `User4`.
+2. **Rad:** beide Arten, pro Platz wählbar (Links/Rechts oder eine Aktion mit Richtung).
+3. **SHIFT:** eigener Platz; leer = Plain mit feinerem Teiler.
+4. **Flächen:** nur UF1. UF8 und UC1 bleiben, wie sie sind.
+5. **Fader-Ziele:** Track, Item volume, **Take volume**, **Last touched parameter**. Nicht gebaut:
+   REAPER action, MIDI CC (Zeilen in der Tabelle oben bleiben als Befund stehen).
+6. **Undo:** ein Schritt pro Griff beim Loslassen, „Item volume“ bzw. „Take volume“, über
+   `Undo_OnStateChangeEx2(nullptr, …, UNDO_STATE_ITEMS, -1)` (reaper_plugin_functions.h:7784,
+   reaper_plugin.h:1535). Gilt auch für den heutigen Items-Fader.
+7. **Fader-Ziel für alle Modi**, eingebaute und eigene; ab Werk Track, Items behält
+   `uf1JogFader2`.
+
+Daraus folgt für den Bau: Art B braucht den neuen Host-Haken (relative REAPER-Action) in
+`Bindings.cpp`; der Fader braucht ihn nicht (keine Action als Ziel). Last touched und der
+Moduswechsel unter der Hand teilen dieselbe Regel „Ziel beim Greifen festhalten“.
