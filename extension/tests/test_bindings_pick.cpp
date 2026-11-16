@@ -79,5 +79,32 @@ int main()
     EXPECT(pickActionFor(ButtonId::Layer2, "layer_select_2", true) == PickAction::SelectAndRun);
 
     if (g_fail == 0) std::printf("test_bindings_pick: all passed\n");
+    // The Settings key on ANY gesture stays the Settings key (Frank 16.11.2026:
+    // his UF1 360 has mixer_toggle on the long press, and the pick swallowed it).
+    {
+        Binding b;
+        b.shortPress[0].type = ActionType::Builtin;
+        b.shortPress[0].action = "uf1_time_display_step";
+        EXPECT(!bindingTogglesSettings(b));
+        b.hasLongPress = true;
+        b.longPress[0].type = ActionType::Builtin;
+        b.longPress[0].action = "mixer_toggle";
+        EXPECT(bindingTogglesSettings(b));
+        b.hasLongPress = false;              // a switched-off long press does not count
+        EXPECT(!bindingTogglesSettings(b));
+        Binding s;
+        s.shortPress[static_cast<int>(Modifier::Shift)].type = ActionType::Builtin;
+        s.shortPress[static_cast<int>(Modifier::Shift)].action = "mixer_toggle";
+        EXPECT(bindingTogglesSettings(s));
+        Binding d;
+        d.hasDoublePress = true;
+        d.doublePress[0].type = ActionType::Builtin;
+        d.doublePress[0].action = "mixer_toggle";
+        EXPECT(bindingTogglesSettings(d));
+        Binding r;                           // a REAPER action is not the builtin
+        r.shortPress[0].type = ActionType::Reaper;
+        r.shortPress[0].action = "mixer_toggle";
+        EXPECT(!bindingTogglesSettings(r));
+    }
     return g_fail == 0 ? 0 : 1;
 }

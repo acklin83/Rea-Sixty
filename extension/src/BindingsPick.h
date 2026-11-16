@@ -48,6 +48,27 @@ inline int layerTheSlotLeadsTo(const ActionSlot& sp)
     return -1;
 }
 
+// ⇨ DOES THIS KEY OPEN AND CLOSE SETTINGS, on ANY of its gestures? The pick
+// used to ask only the Plain short press, so a 360 with mixer_toggle on its LONG
+// press (Frank's) was picked and swallowed while the Bindings pane was open, and
+// the long press that should close the window never came (Frank 16.11.2026).
+inline bool bindingTogglesSettings(const Binding& bd)
+{
+    auto in = [](const ActionSlot& sp) {
+        for (int i = 0; i < stepCount(sp); ++i) {
+            const ActionStep& st = stepAt(sp, i);
+            if (st.type == ActionType::Builtin && st.action == "mixer_toggle") return true;
+        }
+        return false;
+    };
+    for (int m = 0; m < kModifierCount; ++m) {
+        if (in(bd.shortPress[m])) return true;
+        if (bd.hasLongPress && in(bd.longPress[m])) return true;
+        if (bd.hasDoublePress && in(bd.doublePress[m])) return true;
+    }
+    return false;
+}
+
 // `plainBuiltin` is the Plain short-press builtin bound to the key ("" when
 // none or not a builtin), so a key the user made a modifier stays one.
 // `leavesLayer`: the binding would take the surface to another layer

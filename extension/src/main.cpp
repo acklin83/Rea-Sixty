@@ -540,6 +540,9 @@ bool bindingsPickGate_(int tab, uf8::bindings::ButtonId bid, uint8_t rawId,
     if (!uf8::reasixty_bindingsPaneLive() || bid == ButtonId::None) return false;
     const Binding bd = getBinding(layerForButton(bid), bid);
     const auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+    // The Settings key stays the Settings key whichever gesture carries it, or
+    // there is no way out of the window from the surface (BindingsPick.h).
+    if (bindingTogglesSettings(bd)) return false;
     // What the press would run: the slot of the modifier held now.
     const int to = layerTheSlotLeadsTo(
         bd.shortPress[static_cast<int>(currentModifierSnapshot())]);
