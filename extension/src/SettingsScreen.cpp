@@ -5049,7 +5049,32 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                 if (ImGui_SmallButton(ctx, "\xE2\x96\xBC##dn")) reasixty_uf1JogMoveSeq(pos, +1);
             } else { ImGui_TextDisabled(ctx, "\xE2\x96\xBC"); }
             ImGui_SameLine(ctx, nullptr, nullptr);
-            ImGui_Text(ctx, reasixty_uf1JogModeName(m));
+            // The user's own modes are named right here, in their row (Frank
+            // 16.11.2026: "namensfeld in die liste"), not only when one is live.
+            const int uslot = m - uf8::bindings::kUf1JogFirstUserMode;
+            if (uslot >= 0 && uslot < uf8::bindings::kUf1JogUserModes) {
+                namespace bnd = uf8::bindings;
+                static char nameBuf[bnd::kUf1JogUserModes][bnd::kUf1JogUserNameMax + 1] = {};
+                static std::string nameSeen[bnd::kUf1JogUserModes];
+                static bool nameInit[bnd::kUf1JogUserModes] = {};
+                bnd::Uf1JogUserMode um = bnd::getUf1JogUser(uslot);
+                if (!nameInit[uslot] || nameSeen[uslot] != um.name) {
+                    nameInit[uslot] = true;
+                    nameSeen[uslot] = um.name;
+                    snprintf(nameBuf[uslot], sizeof(nameBuf[uslot]), "%s", um.name.c_str());
+                }
+                char hint[16]; snprintf(hint, sizeof(hint), "User %d", uslot + 1);
+                int nf = 0;
+                ImGui_SetNextItemWidth(ctx, 95.0);
+                if (ImGui_InputTextWithHint(ctx, "##jogusrname", hint, nameBuf[uslot],
+                                            sizeof(nameBuf[uslot]), &nf, nullptr)) {
+                    um.name = nameBuf[uslot];
+                    nameSeen[uslot] = um.name;
+                    bnd::setUf1JogUser(uslot, um);
+                }
+            } else {
+                ImGui_Text(ctx, reasixty_uf1JogModeName(m));
+            }
             // The fader can go with the mode (Frank 25.09.2026), every mode
             // since 16.11.2026. Track = what the fader always does.
             double fx = 190.0;
@@ -5143,23 +5168,9 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             const int slot = liveJm - bnd::kUf1JogFirstUserMode;
             bnd::Uf1JogUserMode um = bnd::getUf1JogUser(slot);
             ImGui_Separator(ctx);
-            char hdr[48]; snprintf(hdr, sizeof(hdr), "Own jog mode %d", slot + 1);
+            char hdr[48]; snprintf(hdr, sizeof(hdr), "Own jog mode %d: %s", slot + 1,
+                                   reasixty_uf1JogModeName(liveJm));
             ImGui_Text(ctx, hdr);
-            static char nameBuf[bnd::kUf1JogUserModes][bnd::kUf1JogUserNameMax + 1] = {};
-            static std::string nameSeen[bnd::kUf1JogUserModes];
-            if (nameSeen[slot] != um.name) {
-                nameSeen[slot] = um.name;
-                snprintf(nameBuf[slot], sizeof(nameBuf[slot]), "%s", um.name.c_str());
-            }
-            int nf = 0;
-            ImGui_SetNextItemWidth(ctx, 140.0);
-            if (ImGui_InputText(ctx, "Name##jogusrname", nameBuf[slot], sizeof(nameBuf[slot]),
-                                &nf, nullptr)) {
-                um.name = nameBuf[slot];
-                nameSeen[slot] = um.name;
-                bnd::setUf1JogUser(slot, um);
-            }
-            help_(ctx, "8 characters, shown on the UF1. Empty: User 1 to User 4.");
             if (ImGui_RadioButton(ctx, "Left / right##jogusrkind", !um.relative)) {
                 um.relative = false; bnd::setUf1JogUser(slot, um);
             }

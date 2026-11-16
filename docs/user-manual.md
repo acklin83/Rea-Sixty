@@ -904,10 +904,10 @@ never have to let go of the wheel to change what you are working on.
 ## Your own jog modes
 
 Four more objects, *User 1* to *User 4*, do what you give them. They start hidden. Under
-*Settings → Bindings → UF1 → JOG WHEEL*, tick one in the list so `SCRUB` and the jog reach
-it, then switch the wheel to it. Its settings show below the list:
+*Settings → Bindings → UF1 → JOG WHEEL* each has a row in the list: tick it so `SCRUB` and
+the jog reach it, and type its name in the row, up to 8 characters, shown on the UF1 and in
+the mode banner. Switch the wheel to it and the rest of its settings show below the list:
 
-- **Name**: up to 8 characters, shown on the UF1 and in the mode banner.
 - **Left / right**: each detent to the left fires the *Turn left* action, each detent to
   the right the *Turn right* action. For anything that goes one step at a time: next
   marker, next track, next take, a script.
