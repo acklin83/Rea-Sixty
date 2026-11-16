@@ -1,6 +1,6 @@
 # UF1: eigene Jog-Modi
 
-Stand 16.11.2026, Plan, Entscheide am Ende, nichts gebaut. Frank: „einen weg für user-defineable jog-wheel modes“.
+Stand 16.11.2026, gebaut (`bf3978ba`), Entscheide am Ende. Frank: „einen weg für user-defineable jog-wheel modes“.
 Ein früherer Plan dazu ist weder im Repo noch in der Memory auf dem Mac Studio zu finden.
 
 ## Was es tut
