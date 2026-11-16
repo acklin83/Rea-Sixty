@@ -105,9 +105,12 @@ Aktionseditor.
 
 ### G · Companion, Handbuch, Tests
 
-- Companion-Lua: Banner und Karussell lesen die Namen aus dem C-String, sie kommen ohne
-  Lua-Änderung an. Prüfen, ob die Lua irgendwo die sieben Modi selbst aufzählt; sie steckt in der
-  dylib.
+- Companion: die Lua zählt die Modi nicht selbst auf, `drawJog` (rea_sixty_focused_panel_imgui.lua:542)
+  zeichnet die Liste aus ExtState `uf1_jogmodes`. **Aber** diese Liste baut main.cpp:47837-47862
+  aus einer eigenen Tabelle Modus zu Built-in (`kJog`), und ein Modus ohne Eintrag fällt still
+  heraus (`if (!*b) continue;`). Die vier `jog_mode_user*` müssen in diese Tabelle, sonst fehlen
+  sie im Panel-Dropdown, während Karussell und Settings sie zeigen. Besser: die Tabelle neben
+  `uf1JogModeFriendly` an einen Ort ziehen, den Builtin-Registrierung und Panel beide lesen.
 - Handbuch: Abschnitt „Your own jog modes“ unter Jog, dazu die neuen Built-ins in der Liste.
 - Tests: `perModeNavId` und `splitPerModeNavId` für Modus 7 bis 10, Name und Felder hin und
   zurück durch bindings.json, Teiler (5 Rasten bei Teiler 3 = 1 Auslösung, Rest bleibt),
@@ -156,9 +159,28 @@ Die Ziele, jedes mit Herkunft im Code:
 | **Track** (Werk) | wie heute | wie heute | wie heute | wie heute | Rest der Kette |
 | **Item volume** | dB erstes Item, „no item“ | alle Items, gleiches dB-Verhältnis | erstes Item | keine, kein Undo | Items heute, unverändert |
 | **Take volume** | dB aktiver Take erstes Item | aktive Takes, gleiches Verhältnis | erster Take | keine, kein Undo | neu, gleiches Muster mit `GetActiveTake` / Take-`D_VOL` |
-| **Last touched parameter** | Wert wie Plug-in ihn formatiert, Name = Parametername | linear 0..1 | liest den Parameter | Touch über `noteFaderFxEdit_` / `endFaderFxEdit_` wie Strip Mode | `applyLastParamStep_` (main.cpp:10620) für das Auffinden, `fromParam` (main.cpp:39290) für die Anzeige |
-| **REAPER action (absolute)** | Prozent, Name = Kurzlabel der Action | `KBD_OnMainActionEx` mit 14 Bit (`val` = obere 7 Bit, `valhw` = untere 7 Bit, relmode 0) | bleibt, wo die Hand ihn liess, pro Modus gemerkt | was die Action tut | SDK reaper_plugin_functions.h:4084-4090 |
-| **MIDI CC** | Wert 0..127 bzw. 0..16383, Name = Name des Controls | `midicc::messagesFor(Kind::Fader, …)`, 7 oder 14 Bit, an den Ausgang wie die CC-Ebene | gemerkter Wert; mit Rückweg wie die CC-Ebene | was das Ziel tut | MidiCcLayer.h:243, Ausgang `midiOutputIndexByName_` (main.cpp:23164) |
+| **Last touched parameter** | Wert wie Plug-in ihn formatiert, Name = Parametername | linear 0..1, Ziel beim Greifen festgehalten | liest den Parameter | Touch über `noteFaderFxEdit_` / `endFaderFxEdit_` wie Strip Mode | `applyLastParamStep_` (main.cpp:10620) für das Auffinden, `fromParam` (main.cpp:39290) für die Anzeige |
+| **REAPER action (absolute)** | Prozent, Name = Kurzlabel der Action | `KBD_OnMainActionEx` mit 14 Bit (`val` = obere 7 Bit, `valhw` = untere 7 Bit, relmode 0) | bleibt, wo die Hand ihn liess, pro Modus gemerkt | was die Action tut | SDK reaper_plugin_functions.h:4084-4090; REAPERs OSC-Fläche schickt Absolutwerte genauso (csurf_osc.cpp:2757-2758) |
+| **MIDI CC** | Wert 0..127 bzw. 0..16383, Name = Name des Controls | `midicc::messagesFor(Kind::Fader, …)`, 7 oder 14 Bit, an den Ausgang wie die CC-Ebene | gemerkter Wert, ohne Rückweg (siehe unten) | was das Ziel tut | MidiCcLayer.h:243, Ausgang `midiOutputIndexByName_` (main.cpp:23164) |
+
+**Welche REAPER-Actions einen Wert nehmen** (gelesen aus REAPER 7.86 in /Applications, Texte im
+Programm): rund 50 mit „(MIDI CC/OSC only)“ nehmen einen absoluten Wert, darunter „Track: Set
+volume / pan / width / mute / solo for …“, „Adjust track FX parameter 01-16“, „Adjust last touched
+FX parameter“, „Adjust track send 1-8 volume / pan“, „Set tempo, coarse / fine“, „Options: Set
+metronome volume“, „View: Adjust horizontal / vertical zoom“, „View: Go to track“. Das sind die
+Kandidaten für das Fader-Ziel „REAPER action“.
+
+**Last touched wandert:** jeder Plug-in-Write von Rea-Sixty (UF8-V-Pots, UC1, Sticky Pot) stellt
+REAPERs „zuletzt berührten“ Parameter um; der Code fängt das für die eigene Fokus-Verfolgung an
+drei Stellen ab (main.cpp:22523, 44056, 44189). Darum hält der Fader beim Greifen fest, welchen
+Parameter er fährt, und lässt ihn erst beim Loslassen los. Zwischen zwei Griffen folgt er wie
+REAPER dem zuletzt berührten.
+
+**Rückweg MIDI:** die CC-Ebene hat zwei Rückwege, die CC-Spuren der MIDI-Items auf der gewählten
+Spur und einen Hardware-Eingang (main.cpp:40854-41026). Beide hängen an der aktiven UF8-CC-Ebene
+(`g_ccIdx`, `g_ccLayer`) und an ihrem Zustand pro Seite und Streifen (`midicc::State`,
+MidiCcLayer.h:360). Für einen einzelnen UF1-Fader passt das nicht ohne Umbau. Vorschlag: MIDI CC
+ohne Rückweg, der Motor bleibt beim zuletzt gesendeten Wert.
 
 Welche Ziele gebaut werden, ist Frage 5. „Track“ und „Item volume“ sind die Pflicht, weil Items
 sie heute hat.
@@ -178,8 +200,14 @@ sie heute hat.
 - **Schreibtakt:** einmal pro neuer Position wie `sItemSentPos`. Für Action und MIDI wichtig, sonst
   geht pro Malertakt dieselbe Nachricht raus.
 - **Moduswechsel während der Hand auf dem Fader ist:** das neue Ziel bekommt erst beim nächsten
-  Greifen Werte. Sonst springt ein Parameter auf die Faderstellung des alten Ziels. Heute bei
-  Items ungeregelt (prüfen, nicht raten).
+  Greifen Werte. **Heute gelesen:** `itemFader` wird pro Malertakt neu bestimmt und der
+  Schreibzweig fragt nichts anderes (main.cpp:39341-39421). Wechselt man von Items auf einen
+  anderen Modus, während die Hand auf dem Fader liegt, schreibt der nächste Takt
+  die Faderstellung des Items in das Ziel der normalen Kette (meist `CSurf_OnVolumeChange`): die
+  Spurlautstärke springt. Umgekehrt
+  springen alle gewählten Items auf die Stellung der Spur (`sItemSentPos` ist dann noch 0xFFFF).
+  Das ist ein Fehler im heutigen Items-Fader, den der Umbau mit behebt: das Ziel wird beim Greifen
+  festgehalten, wie oben beim Parameter. Nur aus dem Code gelesen, nicht am Gerät gesehen.
 - **ORC-Side-Car, Hue Mode, RME-Seite:** diese Modi übernehmen den Schirm und den Fader vor dem
   Kanalmaler; das Jog-Ziel gilt dort nicht.
 - **UF8:** unberührt, seine acht Fader bleiben Spuren.
@@ -213,11 +241,16 @@ für Item- und Take-Lautstärke (heute keiner, Frage 6), Fader-Ziele auf dem UF8
   schnell 50 Schritte. Nur im Handbuch nennen, nicht abfangen (REAPER entscheidet das pro Action).
 - **Ketten mit Wartezeit** auf einer Jog-Bindung stauen sich beim schnellen Drehen in der
   Warteschlange. Vorschlag: der Editor sperrt Wartezeiten auf diesen Ids.
-- **Relative Eingabe gibt es nur für REAPER-Actions des Hauptbereichs**, nicht für den
-  MIDI-Editor. Der Picker zeigt ohnehin nur den Hauptbereich (prüfen).
-- **Welche REAPER-Actions relativ arbeiten**, erkennt man nur am Namen; Rea-Sixty prüft das
-  nicht. Eine nicht relative Action bekommt bei Art 2 einen Wert und tut, was sie bei einem
-  MIDI-Wert tut.
+- **Nur Hauptbereich:** der Action-Picker ruft `PromptForAction(1, 0, 0)`, Bereich 0 = Hauptbereich
+  (main.cpp:56538). Actions des MIDI-Editors kann man gar nicht wählen.
+- **Welche REAPER-Actions relativ arbeiten** (REAPER 7.86, Texte im Programm): 16 mit „(MIDI CC
+  relative/mousewheel)“ (Scroll und Zoom horizontal/vertikal, je auch umgekehrt, Seitenweise
+  scrollen, Spurhöhe), „Transport: Scrub/jog (MIDI CC relative/absolute only)“, „Transport:
+  Scrub/jog fine control (MIDI CC relative only)“, dazu „View: Move edit cursor“ und „View: Adjust
+  horizontal scroll“ mit „relative recommended“. Rea-Sixty erkennt das nicht am Namen; eine andere
+  Action bekommt bei Art 2 einen Wert und tut, was sie mit einem MIDI-Wert tut.
+- **Tempo pro Raste** bestimmt bei relativen Actions REAPER, je Action anders. Der Teiler gleicht
+  es aus. Wie gross ein Schritt pro Action ist, zeigt sich nur in REAPER.
 
 ## Nicht in diesem Plan
 
@@ -227,14 +260,13 @@ der Fader-Zone, Werksbeispiele.
 ## Geprüft und nicht geprüft
 
 Gelesen in dieser Sitzung: alle Stellen mit Datei:Zeile oben, die SDK-Stellen zu
-`KBD_OnMainActionEx` und relmode. Nicht geprüft: ob die Companion-Lua die Jog-Modi selbst
-aufzählt, wie der REAPER-Action-Picker Bereiche filtert, welche REAPER-Actions „(MIDI CC
-relative/mousewheel)“ heissen (nur aus REAPERs Aktionsliste zu sehen), ob relmode 1 bei allen
-relativen Actions dasselbe Tempo ergibt. Fader: gelesen die drei Ketten im Kanalmaler, Berührung,
-`applyLastParamStep_`, `midicc::messagesFor`, SDK zu absolutem 14-Bit-Wert. Nicht geprüft: ob
-`TrackFX_SetParamNormalized` den „zuletzt berührten“ Parameter umstellt (dann wanderte das Ziel
-unter der Hand), wie der Rückweg der CC-Ebene den Wert liefert, was beim Moduswechsel unter der Hand
-heute passiert, welche REAPER-Actions „(MIDI CC/OSC only)“ einen absoluten Wert nehmen.
+`KBD_OnMainActionEx` und relmode, REAPERs OSC-Fläche für relative und absolute Werte, die
+Action-Texte im REAPER-7.86-Programm, die Companion-Lua, der Action-Picker, die Rückwege der
+CC-Ebene, der Schreibzweig des Items-Faders beim Moduswechsel, die drei Stellen, an denen der Code
+wandernde „last touched“-Parameter abfängt.
+
+Nur in REAPER zu sehen, darum offen bis zum Bau: wie gross ein Schritt pro relativer Action ist,
+und dass der Items-Fader beim Moduswechsel unter der Hand wirklich springt (aus dem Code gelesen).
 
 ## Fragen an Frank
 
