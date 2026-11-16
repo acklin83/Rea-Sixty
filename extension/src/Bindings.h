@@ -228,20 +228,26 @@ enum class ButtonId : uint16_t {
     // meaning hiding in the drain, which is what jog_nav_* used to do
     // (Frank 2026-08-06 "volle Freiheit", built 2026-08-18).
     // Order is mode-minor and MUST match enum Uf1JogMode (Playhead, Scrub,
-    // Items, Envelope, Razor, Fades, Lanes) so perModeNavId(base, mode) = groupStart + mode.
+    // Items, Envelope, Razor, Fades, Lanes, User1..User4) so perModeNavId(base, mode) =
+    // groupStart + mode.
     // ⚠ A new mode APPENDS to each group (never inserts): the ids are persisted
     // by NAME, so the shifted values are harmless, but the arithmetic above only
     // holds while every group stays contiguous and in enum order.
     Uf1NavUpPlayhead, Uf1NavUpScrub, Uf1NavUpItems, Uf1NavUpEnvelope, Uf1NavUpRazor,
     Uf1NavUpFades, Uf1NavUpLanes,
+    Uf1NavUpUser1, Uf1NavUpUser2, Uf1NavUpUser3, Uf1NavUpUser4,
     Uf1NavLeftPlayhead, Uf1NavLeftScrub, Uf1NavLeftItems, Uf1NavLeftEnvelope, Uf1NavLeftRazor,
     Uf1NavLeftFades, Uf1NavLeftLanes,
+    Uf1NavLeftUser1, Uf1NavLeftUser2, Uf1NavLeftUser3, Uf1NavLeftUser4,
     Uf1NavCentrePlayhead, Uf1NavCentreScrub, Uf1NavCentreItems, Uf1NavCentreEnvelope, Uf1NavCentreRazor,
     Uf1NavCentreFades, Uf1NavCentreLanes,
+    Uf1NavCentreUser1, Uf1NavCentreUser2, Uf1NavCentreUser3, Uf1NavCentreUser4,
     Uf1NavRightPlayhead, Uf1NavRightScrub, Uf1NavRightItems, Uf1NavRightEnvelope, Uf1NavRightRazor,
     Uf1NavRightFades, Uf1NavRightLanes,
+    Uf1NavRightUser1, Uf1NavRightUser2, Uf1NavRightUser3, Uf1NavRightUser4,
     Uf1NavDownPlayhead, Uf1NavDownScrub, Uf1NavDownItems, Uf1NavDownEnvelope, Uf1NavDownRazor,
     Uf1NavDownFades, Uf1NavDownLanes,
+    Uf1NavDownUser1, Uf1NavDownUser2, Uf1NavDownUser3, Uf1NavDownUser4,
     // UF1 1/4" footswitch jacks on the back panel, the twin of the UF8's
     // Foot1/Foot2. No factory binding — user assigns via Settings → Bindings.
     // Device ids 0x00 / 0x01, the same pair the UF8 uses, in the same
@@ -276,6 +282,14 @@ enum class ButtonId : uint16_t {
     Uf1ArrowRightPlugin,  Uf1ArrowRightDaw,  Uf1ArrowRightMeter,  Uf1ArrowRightSends,
     Uf1ChannelSoftKeyPlugin, Uf1ChannelSoftKeyDaw,
     Uf1ChannelSoftKeyMeter,  Uf1ChannelSoftKeySends,
+    // ⇨ THE TURNS OF THE UF1'S OWN JOG MODES (docs/uf1-user-jog-modes-plan.md,
+    // Frank 16.11.2026). Two per slot: the binding a detent to the LEFT fires and
+    // the one a detent to the RIGHT fires. With "one action with direction" only
+    // the Right one counts and gets the detents with their sign. Not physical
+    // keys: the jog dispatch reads them (uf1JogUserDispatch_ in main.cpp) and the
+    // JOG WHEEL page of Settings opens them in the ordinary editor.
+    Uf1JogUser1Left, Uf1JogUser1Right, Uf1JogUser2Left, Uf1JogUser2Right,
+    Uf1JogUser3Left, Uf1JogUser3Right, Uf1JogUser4Left, Uf1JogUser4Right,
     // Jog wheel (0x06, rotate-only) — NOT bindable (mode-driven), but SELECTABLE in
     // the UF1 vector so its Jog Mode settings show below the editor (Frank 2026-08-06).
     // KEEP LAST in the UF1 block: four range checks read `<= Uf1Jog` to mean
@@ -329,7 +343,7 @@ enum class ButtonId : uint16_t {
 // How many jog modes the nav block above is sized for. main.cpp owns the real
 // enum (Uf1JogMode) and static_asserts that the two agree — Bindings.h cannot
 // see it, and a silent mismatch would map keys onto the wrong mode's ids.
-constexpr int kUf1JogModeCountForNav = 7;
+constexpr int kUf1JogModeCountForNav = 11;
 
 // How many UF8 encoder modes the per-mode zoom-pad block above is sized for.
 // main.cpp owns the real enum (EncoderMode) and static_asserts that the two agree.
@@ -420,6 +434,44 @@ inline ButtonId perModeNavId(ButtonId base, int mode)
             return static_cast<ButtonId>(static_cast<int>(ButtonId::Uf1NavDownPlayhead) + mode);
         default: return base;
     }
+}
+
+// ⇨ THE UF1'S OWN JOG MODES (docs/uf1-user-jog-modes-plan.md, Frank 16.11.2026).
+// Four slots appended to the built-in seven (main.cpp Uf1JogMode::User1..User4).
+// What a turn does lives in two bindings per slot (Uf1JogUserNLeft / Right);
+// how the slot reads them lives here and is saved with the bindings, so an
+// exported layer or a mapping carries both.
+constexpr int kUf1JogUserModes      = 4;
+constexpr int kUf1JogFirstUserMode  = 7;   // Uf1JogMode::User1; main.cpp asserts it
+constexpr int kUf1JogUserNameMax    = 8;   // the UF1's text width
+constexpr int kUf1JogUserDividerMax = 64;
+struct Uf1JogUserMode {
+    std::string name;            // empty = "User N"
+    // false: a detent left fires the Left binding, right the Right one.
+    // true:  only the Right binding counts and gets the detents WITH their sign
+    //        (a REAPER action as relative MIDI CC, a builtin as its param).
+    bool        relative = false;
+    int         divider  = 1;    // detents per firing, 1..kUf1JogUserDividerMax
+    bool operator==(const Uf1JogUserMode& o) const
+    {
+        return name == o.name && relative == o.relative && divider == o.divider;
+    }
+};
+
+inline ButtonId uf1JogUserTurnId(int slot, bool right)
+{
+    if (slot < 0 || slot >= kUf1JogUserModes) return ButtonId::None;
+    return static_cast<ButtonId>(static_cast<int>(ButtonId::Uf1JogUser1Left)
+                                 + slot * 2 + (right ? 1 : 0));
+}
+inline bool isUf1JogTurnId(ButtonId id, int* slot = nullptr, bool* right = nullptr)
+{
+    const int v  = static_cast<int>(id);
+    const int lo = static_cast<int>(ButtonId::Uf1JogUser1Left);
+    if (v < lo || v >= lo + kUf1JogUserModes * 2) return false;
+    if (slot)  *slot  = (v - lo) / 2;
+    if (right) *right = ((v - lo) % 2) == 1;
+    return true;
 }
 
 // Map UF8 device byte (FF 22 03 <id> 00 <s>) to ButtonId. Returns None
@@ -966,6 +1018,9 @@ struct Config {
     // Empty is the normal state and NOT a hole: a dynamic bank then announces its
     // own kind and a static one its number (uf1BankDisplayName_ in main.cpp).
     std::string     uf1SoftBankName[kUf1SoftBankStore][kSoftKeyModifierSets];
+    // The UF1's own jog modes: name, kind and divider per slot (v58). The two
+    // turn bindings per slot are ordinary layer entries, resolved like any key.
+    Uf1JogUserMode  uf1JogUser[kUf1JogUserModes];
 };
 
 // Builtin registry. Phase A registers from main.cpp at REAPER_PLUGIN_ENTRY
@@ -1331,6 +1386,22 @@ void cancelLongPress(ButtonId id);
 // detent. Cmd / Ctrl modifier slots empty by default — user-bindable
 // in Settings → Bindings → Channel Encoder.
 bool dispatchEncoder(ButtonId id, int stepDelta);
+
+// ⇨ THE TURNS OF THE UF1'S OWN JOG MODES. resolveTurnSlot picks the slot of `id`
+// (Uf1JogUserNLeft / Right) for the modifier held now, Plain when that one is
+// empty; `own` says whether the held modifier had a slot of its own (an empty
+// Shift slot means "Plain, finer", the caller divides more). False = nothing to
+// fire. runPressSlot fires a slot as a key press would; runSlotWithStep hands
+// a builtin the signed detents as its param (as dispatchEncoder does) and fires
+// anything else once. The REAPER-action-with-direction case is main.cpp's: it
+// needs KBD_OnMainActionEx, which this file cannot see (ORC shares it).
+bool resolveTurnSlot(ButtonId id, ActionSlot& out, bool& own);
+void runPressSlot(const ActionSlot& s);
+bool runSlotWithStep(const ActionSlot& s, int step);
+
+// The UF1's own jog modes: name, kind, divider. set persists.
+Uf1JogUserMode getUf1JogUser(int slot);
+void           setUf1JogUser(int slot, const Uf1JogUserMode& m);
 
 // Mixer-window visibility change hook. Walks Layers 2/3 looking for
 // `auto_when_mixer_visible=true`; on first match saves the current

@@ -147,6 +147,7 @@
 #include "Protocol.h"
 #include "SetupBundle.h"
 #include "MidiCcLayer.h"
+#include "JogUserTurn.h"
 #include "input_level_jsfx.h"  // generated: uf8::setup_bundle::kInputLevelJsfx{Bytes,Size}
 #include "inserts_overlay_lua.h"  // generated: uf8::setup_bundle::kInsertsOverlayLua{Bytes,Size}
 #include "assignment_hud_lua.h"   // generated: uf8::setup_bundle::kAssignmentHudLua{Bytes,Size}
@@ -7030,9 +7031,23 @@ constexpr int kUf1EncoderModeCount =
 // ⚠ APPEND new modes, never insert: SettingsScreen.cpp reads the live mode as a
 // raw int (2 = Items, 3 = Envelope, 4 = Razor) to decide which per-mode rows to
 // show, and the ExtState "uf1JogMode" persists the same int.
-enum class Uf1JogMode : uint8_t { Playhead, Scrub, Items, Envelope, Razor, Fades, Lanes };
+// User1..User4: the user's own jog modes (docs/uf1-user-jog-modes-plan.md, Frank
+// 16.11.2026). APPENDED, never inserted: ExtState keys, the ring and the nav-cross
+// ids all count by this number.
+enum class Uf1JogMode : uint8_t { Playhead, Scrub, Items, Envelope, Razor, Fades, Lanes,
+                                  User1, User2, User3, User4 };
 std::atomic<Uf1JogMode> g_uf1JogMode{Uf1JogMode::Playhead};
-constexpr int kUf1JogModeCount = static_cast<int>(Uf1JogMode::Lanes) + 1;
+constexpr int kUf1JogModeCount = static_cast<int>(Uf1JogMode::User4) + 1;
+static_assert(static_cast<int>(Uf1JogMode::User1) == uf8::bindings::kUf1JogFirstUserMode
+              && kUf1JogModeCount - static_cast<int>(Uf1JogMode::User1)
+                     == uf8::bindings::kUf1JogUserModes,
+              "the user jog modes are the last kUf1JogUserModes of the enum");
+// Which user slot a mode is, -1 for a built-in one.
+inline int uf1JogUserSlot_(Uf1JogMode m)
+{
+    const int v = static_cast<int>(m) - static_cast<int>(Uf1JogMode::User1);
+    return (v >= 0 && v < uf8::bindings::kUf1JogUserModes) ? v : -1;
+}
 // The per-mode nav-cross ButtonIds are laid out in blocks of this size, and
 // Bindings.h has to hard-code it because it cannot see this enum. Adding a jog
 // mode without widening the block would map the new mode onto the next key's
@@ -7278,9 +7293,13 @@ std::atomic<int>    g_uf1JogUnit[kUf1JogModeCount];
 std::atomic<double> g_uf1JogStep[kUf1JogModeCount];
 // ⇨ THE FADER GOES WITH THE JOG MODE, if the user wants it (Frank 25.09.2026:
 // "Jog-Modes ... damit die auch den Fader mitnehmen können wenn gewünscht (pro
-// Mode)"). Only Items has a fader target today: "Fader = Item Volume", which
-// replaced the Item Volume side-car. ExtState "uf1JogFader<m>", default off.
-std::atomic<bool>   g_uf1JogFader[kUf1JogModeCount];
+// Mode)"). Until 16.11.2026 one bool for Items ("Fader = Item Volume", which
+// replaced the Item Volume side-car); now a target per mode, every mode
+// (docs/uf1-user-jog-modes-plan.md, Baustein H). Track = the fader does what it
+// always did. ExtState "uf1JogFaderT<m>"; the old "uf1JogFader<m>" = 1 loads as
+// Item volume. Read in ONE place, uf1PaintChannel_, by readout, write and motor.
+enum class Uf1JogFaderTarget : int { Track = 0, ItemVolume, TakeVolume, LastParam, Count };
+std::atomic<int>    g_uf1JogFaderTarget[kUf1JogModeCount];
 // Which Jog Modes the Scrub-held picker offers (ExtState "uf1JogVis<m>", default
 // all on) and the ORDER they come in (Frank 2026-08-20: "die kommen ja in einer
 // Reihenfolge daher"; ExtState "uf1_jog_seq", CSV, default enum order). The same
@@ -7296,7 +7315,8 @@ struct Uf1JogStepInit_ {
     Uf1JogStepInit_() {
         for (int m = 0; m < kUf1JogModeCount; ++m) {
             g_uf1JogRing.seq[m].store(m);     // identity = today's enum order
-            g_uf1JogRing.vis[m].store(true);
+            // The user's own modes start hidden: empty, they would do nothing.
+            g_uf1JogRing.vis[m].store(m < static_cast<int>(Uf1JogMode::User1));
         }
         auto set = [](Uf1JogMode m, Uf1JogUnit u, double v) {
             g_uf1JogUnit[static_cast<int>(m)].store(static_cast<int>(u));
@@ -7327,12 +7347,31 @@ struct Uf1JogStepInit_ {
         // picker does (g_uf1JogPickSpeed). The pair is never read; it is set so
         // a stray read gets a sane value instead of 0.
         set(Uf1JogMode::Lanes,    Uf1JogUnit::Grid,    0.25);
+        // The user's own modes count detents (their divider), never time. The pair
+        // is set for the same reason as Lanes'.
+        set(Uf1JogMode::User1,    Uf1JogUnit::Grid,    0.25);
+        set(Uf1JogMode::User2,    Uf1JogUnit::Grid,    0.25);
+        set(Uf1JogMode::User3,    Uf1JogUnit::Grid,    0.25);
+        set(Uf1JogMode::User4,    Uf1JogUnit::Grid,    0.25);
     }
 } g_uf1JogStepInit_;
+// The name of a user jog mode: what the user typed, else "User N". One buffer per
+// slot and thread, so the pointer lives until the next call for that slot; every
+// caller copies it into a string or a frame at once.
+inline const char* uf1JogUserName_(int slot)
+{
+    thread_local std::string buf[uf8::bindings::kUf1JogUserModes];
+    if (slot < 0 || slot >= uf8::bindings::kUf1JogUserModes) return "Jog";
+    std::string n = uf8::bindings::getUf1JogUser(slot).name;
+    if (n.empty()) n = "User " + std::to_string(slot + 1);
+    buf[slot] = std::move(n);
+    return buf[slot].c_str();
+}
 // Full name (desktop mode-banner) + compact name (UF1 header "REAPER" cell, ≤ fits
 // with the "JOG " prefix in 25 bytes).
 inline const char* uf1JogModeFriendly(Uf1JogMode m)
 {
+    if (const int u = uf1JogUserSlot_(m); u >= 0) return uf1JogUserName_(u);
     switch (m) {
         case Uf1JogMode::Playhead: return "Playhead";
         case Uf1JogMode::Scrub:    return "Scrub";
@@ -7341,11 +7380,13 @@ inline const char* uf1JogModeFriendly(Uf1JogMode m)
         case Uf1JogMode::Razor:    return "Razor Edit";
         case Uf1JogMode::Fades:    return "Fades";
         case Uf1JogMode::Lanes:    return "Lanes";
+        default:                   break;   // User1..4: above
     }
     return "Jog";
 }
 inline const char* uf1JogModeHdr_(Uf1JogMode m)
 {
+    if (const int u = uf1JogUserSlot_(m); u >= 0) return uf1JogUserName_(u);
     switch (m) {
         case Uf1JogMode::Playhead: return "Playhead";
         case Uf1JogMode::Scrub:    return "Scrub";
@@ -7354,6 +7395,7 @@ inline const char* uf1JogModeHdr_(Uf1JogMode m)
         case Uf1JogMode::Razor:    return "Razor";
         case Uf1JogMode::Fades:    return "Fades";
         case Uf1JogMode::Lanes:    return "Lanes";
+        default:                   break;   // User1..4: above
     }
     return "Jog";
 }
@@ -11923,6 +11965,16 @@ void uf1JogModeStep_(int rawStep)
     if (g_uf1JogMode.exchange(nm) != nm) { uf1JogPersistMode_(nm); g_pageDirty.store(true); }
 }
 
+// The CYCLE (jog_mode_cycle and its REAPER action): the next VISIBLE mode in ring
+// order, like the picker. It used to walk the enum and stopped at hidden modes
+// too, which with the four (hidden, empty) user slots would have been four dead
+// stops in a row (16.11.2026).
+Uf1JogMode uf1JogCycleNext_()
+{
+    return static_cast<Uf1JogMode>(
+        g_uf1JogRing.step(static_cast<int>(g_uf1JogMode.load()), 1));
+}
+
 // Items mode: move the SELECTED media items in time by `dt` seconds (the jog's OWN
 // step × count, Shift-fine already applied — NOT g_nudgeAmount). Pure API (no action
 // ID to guess); main thread. The GROUP is clamped as a rigid block: when moving left,
@@ -15816,6 +15868,53 @@ static double uf1JogDelta_(Uf1JogMode mode, int count,
     return step * scale * count;
 }
 
+// ⇨ A TURN IN ONE OF THE USER'S OWN JOG MODES (docs/uf1-user-jog-modes-plan.md,
+// Frank 16.11.2026). Two kinds per slot: Left / Right fires the Left binding per
+// detent to the left and the Right one per detent to the right, as a key press;
+// "with direction" reads only the Right binding and hands it the detents with
+// their sign: a REAPER action as relative MIDI CC (relmode 1, the way REAPER's
+// own OSC surface does it), a builtin as its param. The divider counts detents
+// per firing; an empty Shift slot means Plain, finer (the jog's Shift fine div).
+// Main thread (the jog drain), so the REAPER API is safe here.
+void uf1JogUserDispatch_(int slot, int count)
+{
+    namespace bnd = uf8::bindings;
+    if (count == 0 || slot < 0 || slot >= bnd::kUf1JogUserModes) return;
+    const bnd::Uf1JogUserMode um = bnd::getUf1JogUser(slot);
+    const bnd::ButtonId id = bnd::uf1JogUserTurnId(slot, um.relative || count > 0);
+    bnd::ActionSlot sl;
+    bool own = false;
+    if (!bnd::resolveTurnSlot(id, sl, own)) return;
+    double div = std::max(1, um.divider);
+    if (!own && bnd::modifierHeld(bnd::Modifier::Shift)) {
+        const double fd = g_uf1JogFineDiv.load();
+        if (fd > 1.0) div *= fd;
+    }
+    // Per slot AND per turn binding: a remainder from the Left binding is not
+    // a step of the Right one (divide() also drops it on a reversal).
+    static double accum[bnd::kUf1JogUserModes] = {};
+    const int fires = jogusr::divide(accum[slot], count, div);
+    if (fires == 0) return;
+    if (!um.relative) {
+        for (int i = 0, n = std::abs(fires); i < n; ++i) bnd::runPressSlot(sl);
+        return;
+    }
+    if (sl.type == bnd::ActionType::Reaper) {
+        int cmd = 0;
+        if (!sl.action.empty() && sl.action[0] == '_') cmd = NamedCommandLookup(sl.action.c_str());
+        else                                            cmd = std::atoi(sl.action.c_str());
+        if (cmd <= 0) return;
+        int parts[8];
+        const int np = jogusr::splitRel(fires, parts, 8);
+        for (int i = 0; i < np; ++i) {
+            const jogusr::Rel1 r = jogusr::relmode1(parts[i]);
+            KBD_OnMainActionEx(cmd, r.val, r.valhw, /*relmode*/ 1, GetMainHwnd(), nullptr);
+        }
+        return;
+    }
+    bnd::runSlotWithStep(sl, fires);
+}
+
 void uf1JogDispatch_(int count)
 {
     count = uf1JogDeJitter_(count);
@@ -15916,6 +16015,12 @@ void uf1JogDispatch_(int count)
             break;
         case Uf1JogMode::Razor:    applyUf1JogRazor_(count, delta);    break;
         case Uf1JogMode::Fades:    applyUf1JogFades_(count, delta);    break;
+        case Uf1JogMode::User1:
+        case Uf1JogMode::User2:
+        case Uf1JogMode::User3:
+        case Uf1JogMode::User4:
+            uf1JogUserDispatch_(uf1JogUserSlot_(mode), count);
+            break;
         case Uf1JogMode::Lanes: {
             // Centre held: the wheel paints. SHIFT: lane or comp area. Plain:
             // the playhead (Frank 02.10.2026). Both moves at Playhead mode's step.
@@ -39270,20 +39375,80 @@ void uf1PaintChannel_()
     // Now the zone above the fader can name what the fader moves. Same order as
     // the branches below, so the readout and the write can never pick different
     // targets. The Extender's 9th send keeps arriving through sendOverride.
-    // ⇨ JOG MODE ITEMS WITH "FADER = ITEM VOLUME" (Frank 25.09.2026), the Item
-    // Volume side-car's job without the side-car. The fader drives EVERY
-    // selected item, PROPORTIONALLY: the first one follows the fader, the others
-    // take the same change in dB, so their differences stay. The motor follows
-    // the first item. No item: the fader stays put and the zone says "no item".
-    // First in all three chains below (readout, write, motor), because it is a
-    // choice the user made for this mode on purpose.
-    const bool itemFader = g_uf1JogMode.load() == Uf1JogMode::Items
-                        && g_uf1JogFader[static_cast<int>(Uf1JogMode::Items)].load();
+    // ⇨ THE JOG MODE'S FADER TARGET (Frank 25.09.2026 for Items, 16.11.2026 for
+    // every mode; docs/uf1-user-jog-modes-plan.md, Baustein H). Track = what the
+    // fader always did, the rest of the chain below. Item / Take volume drive
+    // EVERY selected item (its active take), PROPORTIONALLY: the first one
+    // follows the fader, the others take the same change in dB, so their
+    // differences stay; the motor follows the first. Last touched parameter =
+    // REAPER's, linear like Strip Mode. Nothing to drive: the fader stays put and
+    // the zone says so. First in all three chains below (readout, write, motor),
+    // because it is a choice the user made for this mode on purpose.
+    // ⛔ LATCHED AT THE GRAB. The target, and for Last touched the parameter, are
+    // fixed while the hand is on the fader. Before this the target was asked
+    // every tick: switching the jog mode under the hand wrote the fader's
+    // position into the NEW target (the track jumped to the item's level, or the
+    // items to the track's). And every plug-in write of ours (UF8 V-Pots, UC1,
+    // Sticky Pot) moves REAPER's last touched parameter, so an unlatched fader
+    // would slide onto whatever another hand just turned.
+    static int  sJogTarget = -1;          // latched target, -1 = hand off
+    static int  sJogLtTr = -1, sJogLtFx = -1, sJogLtParam = -1;
+    // REAPER's last touched TRACK FX parameter, as (track, fx, param); false for
+    // none, a take FX (not driven here) or a stale index.
+    auto lastTouchedParam = [](int& trI, int& fx, int& prm) {
+        int trWord = 0, fxWord = 0, p = 0;
+        if (!GetLastTouchedFX(&trWord, &fxWord, &p)) return false;
+        if ((trWord >> 16) != 0) return false;           // item FX
+        trI = trWord & 0xFFFF;                           // 0 = master
+        fx  = fxWord & 0x1FFFFFF;                        // keeps the record-FX flag
+        prm = p;
+        return true;
+    };
+    auto trackOf = [](int trI) -> MediaTrack* {
+        return trI == 0 ? GetMasterTrack(nullptr) : GetTrack(nullptr, trI - 1);
+    };
+    {
+        const int live = g_uf1JogFaderTarget[static_cast<int>(g_uf1JogMode.load())].load();
+        if (!touched) {
+            sJogTarget = -1;
+        } else if (sJogTarget < 0) {
+            sJogTarget = live;
+            sJogLtTr = sJogLtFx = sJogLtParam = -1;
+            if (live == static_cast<int>(Uf1JogFaderTarget::LastParam)) {
+                int a = -1, b = -1, c = -1;
+                if (lastTouchedParam(a, b, c)) { sJogLtTr = a; sJogLtFx = b; sJogLtParam = c; }
+            }
+        }
+    }
+    const auto jogTarget = static_cast<Uf1JogFaderTarget>(
+        touched ? sJogTarget
+                : g_uf1JogFaderTarget[static_cast<int>(g_uf1JogMode.load())].load());
+    const bool itemFader  = jogTarget == Uf1JogFaderTarget::ItemVolume;
+    const bool takeFader  = jogTarget == Uf1JogFaderTarget::TakeVolume;
+    const bool paramFader = jogTarget == Uf1JogFaderTarget::LastParam;
     std::vector<MediaItem*> selItems;
-    if (itemFader) {
+    std::vector<MediaItem_Take*> selTakes;
+    if (itemFader || takeFader) {
         const int n = CountSelectedMediaItems(nullptr);
         for (int i = 0; i < n; ++i)
-            if (MediaItem* it = GetSelectedMediaItem(nullptr, i)) selItems.push_back(it);
+            if (MediaItem* it = GetSelectedMediaItem(nullptr, i)) {
+                selItems.push_back(it);
+                if (MediaItem_Take* tk = GetActiveTake(it)) selTakes.push_back(tk);
+            }
+    }
+    // A take's D_VOL is negative when its polarity is flipped; the fader rides
+    // the size and leaves the sign alone.
+    auto takeVol = [](MediaItem_Take* tk) { return std::fabs(GetMediaItemTakeInfo_Value(tk, "D_VOL")); };
+    MediaTrack* ltTr = nullptr;
+    int ltFx = -1, ltParam = -1;
+    if (paramFader) {
+        int a = -1, b = -1, c = -1;
+        const bool ok = touched ? (sJogLtTr >= 0 && ((a = sJogLtTr), (b = sJogLtFx), (c = sJogLtParam), true))
+                                : lastTouchedParam(a, b, c);
+        if (ok) {
+            MediaTrack* t = trackOf(a);
+            if (t && c >= 0 && c < TrackFX_GetNumParams(t, b)) { ltTr = t; ltFx = b; ltParam = c; }
+        }
     }
     Uf1FaderDb faderDb;
     {
@@ -39301,12 +39466,41 @@ void uf1PaintChannel_()
             faderDb.value = splitFaderUnit_(v, &faderDb.unit);
             faderDb.set   = true;
         };
+        // The zone NAMES a jog target: the track's name over a fader that moves
+        // something else would say you are riding the track.
         if (itemFader) {
             if (!selItems.empty()) {
                 faderDb.value = formatDbReadout(GetMediaItemInfo_Value(selItems[0], "D_VOL"));
                 faderDb.unit  = "dB";
+                faderDb.name  = "Item Vol";
             } else {
                 faderDb.name  = "no item";   // value and unit stay empty
+            }
+            faderDb.set = true;
+        }
+        else if (takeFader) {
+            if (!selTakes.empty()) {
+                faderDb.value = formatDbReadout(takeVol(selTakes[0]));
+                faderDb.unit  = "dB";
+                faderDb.name  = "Take Vol";
+            } else {
+                faderDb.name  = selItems.empty() ? "no item" : "no take";
+            }
+            faderDb.set = true;
+        }
+        else if (paramFader) {
+            if (ltTr) {
+                fromParam(ltTr, ltFx, ltParam);
+                char pn[64] = {0};
+                TrackFX_GetParamName(ltTr, ltFx, ltParam, pn, sizeof(pn));
+                std::string n(pn);
+                for (auto& ch : n) {
+                    const unsigned char u = static_cast<unsigned char>(ch);
+                    if (u < 0x20 || u > 0x7E) ch = '-';
+                }
+                faderDb.name = n.empty() ? std::string("Param") : n;
+            } else {
+                faderDb.name = "no param";
             }
             faderDb.set = true;
         }
@@ -39331,7 +39525,10 @@ void uf1PaintChannel_()
     // End-of-edit finalise (finishRouteVolEdit_ isend=1) fired ONCE on touch-release,
     // so Touch-mode recording stops + snaps back like the surface send-fader path.
     static bool sSendFaderEditing = false;
-    static uint16_t sItemSentPos = 0xFFFF;   // last position written to the items
+    static uint16_t sItemSentPos = 0xFFFF;   // last position written to the jog target
+    // An item or take level written during this grab: one undo step for the
+    // whole grab when the hand lets go (Frank 16.11.2026). 0 = none.
+    static int sJogUndo = 0;   // 1 = item volume, 2 = take volume
     // Cleared every pass; the branch that writes track volume (or, under FLIP,
     // track pan) sets it again.
     g_uf1FaderVolTr = nullptr;
@@ -39356,6 +39553,33 @@ void uf1PaintChannel_()
                         SetMediaItemInfo_Value(it, "D_VOL", std::clamp(v, 0.0, top));
                         UpdateItemInProject(it);
                     }
+                    sJogUndo = 1;
+                }
+            }
+            else if (takeFader) {
+                // Item volume's rule, on the active takes.
+                if (!selTakes.empty() && pos != sItemSentPos) {
+                    sItemSentPos = pos;
+                    const double want = uf1PosToVol_(pos);
+                    const double was  = takeVol(selTakes[0]);
+                    const double top  = uf1PosToVol_(kUf1FaderMax);
+                    for (MediaItem_Take* tk : selTakes) {
+                        const double cur  = GetMediaItemTakeInfo_Value(tk, "D_VOL");
+                        const double sign = cur < 0.0 ? -1.0 : 1.0;
+                        const double v = (was > 1e-9) ? std::fabs(cur) * (want / was) : want;
+                        SetMediaItemTakeInfo_Value(tk, "D_VOL", sign * std::clamp(v, 0.0, top));
+                        if (MediaItem* it = GetMediaItemTake_Item(tk)) UpdateItemInProject(it);
+                    }
+                    sJogUndo = 2;
+                }
+            }
+            else if (paramFader) {
+                // Strip Mode's write, on the parameter latched at the grab.
+                if (ltTr && pos != sItemSentPos) {
+                    sItemSentPos = pos;
+                    g_ownWriteFocusLockUntilMs.store(nowMs_() + kFaderNoSelectMs);
+                    TrackFX_SetParamNormalized(ltTr, ltFx, ltParam, uf1PosToNorm_(pos));
+                    noteFaderFxEdit_(kUf1FaderEditSlot, ltTr, ltFx, ltParam);
                 }
             }
             else if (!ftr) {
@@ -39448,12 +39672,27 @@ void uf1PaintChannel_()
             sExtFaderEditing = false;
         }
         sItemSentPos = 0xFFFF;   // the next grab writes from its first position
+        if (sJogUndo != 0) {
+            Undo_OnStateChangeEx2(nullptr, sJogUndo == 1 ? "Item volume" : "Take volume",
+                                  UNDO_STATE_ITEMS, -1);
+            sJogUndo = 0;
+        }
+        const uint16_t heldPos = sLastMotorPos != 0xFFFF ? sLastMotorPos : uint16_t{0};
         uint16_t pos;
         if (itemFader) {
             // The motor follows the first item; with none, it stays where it is.
             pos = !selItems.empty()
                 ? uf1VolToPos_(GetMediaItemInfo_Value(selItems[0], "D_VOL"))
-                : (sLastMotorPos != 0xFFFF ? sLastMotorPos : uint16_t{0});
+                : heldPos;
+        } else if (takeFader) {
+            pos = !selTakes.empty() ? uf1VolToPos_(takeVol(selTakes[0])) : heldPos;
+        } else if (paramFader) {
+            if (ltTr) {
+                const double n = TrackFX_GetParamNormalized(ltTr, ltFx, ltParam);
+                pos = static_cast<uint16_t>(std::clamp(n, 0.0, 1.0) * double(kUf1FaderMax) + 0.5);
+            } else {
+                pos = heldPos;
+            }
         } else if (!ftr) {
             pos = 0;   // empty 9th Extender slot → park low, like a blank strip
         } else if (stripFader) {
@@ -47838,6 +48077,12 @@ void onTimerBody_()
                             { Uf1JogMode::Razor,    "jog_mode_razor" },
                             { Uf1JogMode::Fades,    "jog_mode_fades" },
                             { Uf1JogMode::Lanes,    "jog_mode_lanes" },
+                            // ⛔ A mode missing here drops out of the panel's list
+                            // without a word (the `continue` below).
+                            { Uf1JogMode::User1,    "jog_mode_user1" },
+                            { Uf1JogMode::User2,    "jog_mode_user2" },
+                            { Uf1JogMode::User3,    "jog_mode_user3" },
+                            { Uf1JogMode::User4,    "jog_mode_user4" },
                         };
                         const auto curJ = g_uf1JogMode.load();
                         std::string uj; int ji = 0, row = 0;
@@ -51521,6 +51766,15 @@ custom_action_register_t g_actionJogModeLanes{
 int g_cmdJogModeCycle = 0, g_cmdJogModePlayhead = 0, g_cmdJogModeScrub = 0,
     g_cmdJogModeItems = 0, g_cmdJogModeEnvelope = 0, g_cmdJogModeRazor = 0,
     g_cmdJogModeFades = 0, g_cmdJogModeLanes = 0;
+// The user's own four jog modes. The action names stay "User N" whatever the
+// user calls the slot: REAPER keeps an action's name from its registration.
+custom_action_register_t g_actionJogModeUser[uf8::bindings::kUf1JogUserModes] = {
+    { 0, "REASIXTY_JOG_MODE_USER1", "Rea-Sixty: UF1 Jog Mode = User 1", nullptr },
+    { 0, "REASIXTY_JOG_MODE_USER2", "Rea-Sixty: UF1 Jog Mode = User 2", nullptr },
+    { 0, "REASIXTY_JOG_MODE_USER3", "Rea-Sixty: UF1 Jog Mode = User 3", nullptr },
+    { 0, "REASIXTY_JOG_MODE_USER4", "Rea-Sixty: UF1 Jog Mode = User 4", nullptr },
+};
+int g_cmdJogModeUser[uf8::bindings::kUf1JogUserModes] = {};
 
 // UF1 channel-encoder MODE + the four hardware VIEW modes as REAPER-native
 // actions too (Frank 2026-08-10, the same both-routes ask the Jog Modes got).
@@ -52148,7 +52402,7 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     {
         // UF1 Jog Mode actions — inline mirror of the jog_mode_* builtins.
         int jm = -1;
-        if      (command == g_cmdJogModeCycle)    jm = (static_cast<int>(g_uf1JogMode.load()) + 1) % kUf1JogModeCount;
+        if      (command == g_cmdJogModeCycle)    jm = static_cast<int>(uf1JogCycleNext_());
         else if (command == g_cmdJogModePlayhead) jm = static_cast<int>(Uf1JogMode::Playhead);
         else if (command == g_cmdJogModeScrub)    jm = static_cast<int>(Uf1JogMode::Scrub);
         else if (command == g_cmdJogModeItems)    jm = static_cast<int>(Uf1JogMode::Items);
@@ -52156,6 +52410,9 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
         else if (command == g_cmdJogModeRazor)    jm = static_cast<int>(Uf1JogMode::Razor);
         else if (command == g_cmdJogModeFades)    jm = static_cast<int>(Uf1JogMode::Fades);
         else if (command == g_cmdJogModeLanes)    jm = static_cast<int>(Uf1JogMode::Lanes);
+        else for (int u = 0; u < uf8::bindings::kUf1JogUserModes; ++u)
+            if (command != 0 && command == g_cmdJogModeUser[u])
+                jm = static_cast<int>(Uf1JogMode::User1) + u;
         if (jm >= 0) {
             g_uf1JogMode.store(static_cast<Uf1JogMode>(jm));
             char b[8]; std::snprintf(b, sizeof(b), "%d", jm);
@@ -52321,6 +52578,10 @@ int toggleActionState(int command)
         for (const auto& a : kStateful)
             if (a.cmd != 0 && command == a.cmd)
                 return uf8::bindings::builtinStateOf(a.builtin, 0) ? 1 : 0;
+        for (int u = 0; u < uf8::bindings::kUf1JogUserModes; ++u)
+            if (g_cmdJogModeUser[u] != 0 && command == g_cmdJogModeUser[u])
+                return g_uf1JogMode.load() == static_cast<Uf1JogMode>(
+                           static_cast<int>(Uf1JogMode::User1) + u) ? 1 : 0;
         // The favourite switches: exactly one of each row of eight is lit, which
         // is the whole readout — it is how you see which strip is on the track
         // without looking at the plug-in (Frank 2026-09-16).
@@ -55228,22 +55489,31 @@ void reasixty_setUf1JogModeVisible(int mode, bool on)
     SetExtState("rea_sixty", key, on ? "1" : "0", true);
 }
 int reasixty_uf1JogModeCount() { return kUf1JogModeCount; }
-// Whether a jog mode has a fader target at all (only Items, for now), and the
-// user's choice for it.
-bool reasixty_uf1JogModeHasFader(int mode)
+// The jog mode's fader target (Baustein H): every mode has the choice.
+int reasixty_uf1JogFaderTargetCount() { return static_cast<int>(Uf1JogFaderTarget::Count); }
+const char* reasixty_uf1JogFaderTargetName(int t)
 {
-    return mode == static_cast<int>(Uf1JogMode::Items);
+    switch (static_cast<Uf1JogFaderTarget>(t)) {
+        case Uf1JogFaderTarget::Track:      return "Track";
+        case Uf1JogFaderTarget::ItemVolume: return "Item volume";
+        case Uf1JogFaderTarget::TakeVolume: return "Take volume";
+        case Uf1JogFaderTarget::LastParam:  return "Last touched parameter";
+        case Uf1JogFaderTarget::Count:      break;
+    }
+    return "";
 }
-bool reasixty_uf1JogFaderFollows(int mode)
+int reasixty_uf1JogFaderTarget(int mode)
 {
-    return (mode >= 0 && mode < kUf1JogModeCount) && g_uf1JogFader[mode].load();
+    return (mode >= 0 && mode < kUf1JogModeCount) ? g_uf1JogFaderTarget[mode].load() : 0;
 }
-void reasixty_setUf1JogFaderFollows(int mode, bool on)
+void reasixty_setUf1JogFaderTarget(int mode, int t)
 {
     if (mode < 0 || mode >= kUf1JogModeCount) return;
-    g_uf1JogFader[mode].store(on);
-    char key[24]; std::snprintf(key, sizeof(key), "uf1JogFader%d", mode);
-    SetExtState("rea_sixty", key, on ? "1" : "0", true);
+    if (t < 0 || t >= static_cast<int>(Uf1JogFaderTarget::Count)) return;
+    g_uf1JogFaderTarget[mode].store(t);
+    char key[24]; std::snprintf(key, sizeof(key), "uf1JogFaderT%d", mode);
+    SetExtState("rea_sixty", key, std::to_string(t).c_str(), true);
+    g_pageDirty.store(true);
 }
 // Ring order, mirroring the encoder ring's accessors one for one.
 int reasixty_uf1JogSeqAt(int pos)
@@ -58141,7 +58411,7 @@ void registerBindingHandlers()
     registerBuiltin("jog_mode_cycle", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            const int m = (static_cast<int>(g_uf1JogMode.load()) + 1) % kUf1JogModeCount;
+            const int m = static_cast<int>(uf1JogCycleNext_());
             g_uf1JogMode.store(static_cast<Uf1JogMode>(m));
             char b[8]; std::snprintf(b, sizeof(b), "%d", m);
             SetExtState("rea_sixty", "uf1JogMode", b, true);
@@ -58184,6 +58454,19 @@ void registerBindingHandlers()
         [](int) { return g_uf1JogMode.load() == Uf1JogMode::Lanes; },
         "UF1 Jog Mode: Lanes", false
     });
+    // The user's own four. Literal names, one call each: check_builtin_docs.py
+    // reads registerBuiltin("…") and would not see a name built in a loop.
+    auto userJog = [setJogMode](int u) {
+        const auto m = static_cast<Uf1JogMode>(static_cast<int>(Uf1JogMode::User1) + u);
+        return DescBuilder{
+            [setJogMode, m](bool f, bool, int) { if (f) setJogMode(m); },
+            [m](int) { return g_uf1JogMode.load() == m; },
+            "", false };
+    };
+    { auto d = userJog(0); d.displayName = "UF1 Jog Mode: User 1"; registerBuiltin("jog_mode_user1", d); }
+    { auto d = userJog(1); d.displayName = "UF1 Jog Mode: User 2"; registerBuiltin("jog_mode_user2", d); }
+    { auto d = userJog(2); d.displayName = "UF1 Jog Mode: User 3"; registerBuiltin("jog_mode_user3", d); }
+    { auto d = userJog(3); d.displayName = "UF1 Jog Mode: User 4"; registerBuiltin("jog_mode_user4", d); }
 
     // ⇨ FIXED LANES (plan docs/fixed-lanes-plan.md): the verbs both surfaces
     // share, on the UF1 cross in jog mode Lanes and on the UF8 zoom pad in
@@ -61457,9 +61740,16 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         char vkey[24]; std::snprintf(vkey, sizeof(vkey), "uf1JogVis%d", m);
         if (const char* v = GetExtState("rea_sixty", vkey); v && *v)
             g_uf1JogRing.vis[m].store(std::atoi(v) != 0);
+        // The target; a file from before 16.11.2026 has only the Items bool.
+        char tkey[24]; std::snprintf(tkey, sizeof(tkey), "uf1JogFaderT%d", m);
         char fkey[24]; std::snprintf(fkey, sizeof(fkey), "uf1JogFader%d", m);
-        if (const char* v = GetExtState("rea_sixty", fkey); v && *v)
-            g_uf1JogFader[m].store(std::atoi(v) != 0);
+        if (const char* v = GetExtState("rea_sixty", tkey); v && *v) {
+            const int t = std::atoi(v);
+            if (t >= 0 && t < static_cast<int>(Uf1JogFaderTarget::Count))
+                g_uf1JogFaderTarget[m].store(t);
+        } else if (const char* f = GetExtState("rea_sixty", fkey); f && *f && std::atoi(f) != 0) {
+            g_uf1JogFaderTarget[m].store(static_cast<int>(Uf1JogFaderTarget::ItemVolume));
+        }
     }
     // softKeyBank intentionally NOT restored from ExtState — every
     // REAPER load starts on V-POT (bank 0) so the row matches what
@@ -61636,6 +61926,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdJogModeRazor    = plugin_register("custom_action", &g_actionJogModeRazor);
     g_cmdJogModeFades    = plugin_register("custom_action", &g_actionJogModeFades);
     g_cmdJogModeLanes    = plugin_register("custom_action", &g_actionJogModeLanes);
+    for (int u = 0; u < uf8::bindings::kUf1JogUserModes; ++u)
+        g_cmdJogModeUser[u] = plugin_register("custom_action", &g_actionJogModeUser[u]);
     // UF1 encoder modes + the four hardware view modes. idStr/name come from the
     // static tables next to the declarations (the register_t only stores the
     // pointers, so they must outlive registration — string literals do).

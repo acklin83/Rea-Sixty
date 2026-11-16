@@ -70,7 +70,7 @@ int main()
         bnd::setBinding(0, ButtonId::Layer3, l3);
     }
     std::string t = fileText();
-    const auto at = t.find("\"version\": 57");
+    const auto at = t.find("\"version\": 58");
     EXPECT(at != std::string::npos);
     if (at != std::string::npos) t.replace(at, 13, "\"version\": 55");
     writeText(t);
@@ -78,7 +78,7 @@ int main()
 
     EXPECT(shiftOf(bnd::getBinding(0, ButtonId::Layer2)).action == "layer_select_1");   // kept
     EXPECT(shiftOf(bnd::getBinding(0, ButtonId::Layer3)).action == "selection_mode_dynamount");   // filled
-    EXPECT(fileText().find("\"version\": 57") != std::string::npos);
+    EXPECT(fileText().find("\"version\": 58") != std::string::npos);
 
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
     std::printf("sidecar_keys: all passed\n");

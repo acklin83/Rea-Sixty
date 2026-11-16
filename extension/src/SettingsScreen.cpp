@@ -208,9 +208,14 @@ const char* reasixty_uf1JogModeName(int mode);
 bool        reasixty_uf1JogModeVisible(int mode);
 void        reasixty_setUf1JogModeVisible(int mode, bool on);
 int         reasixty_uf1JogModeCount();
-bool        reasixty_uf1JogModeHasFader(int mode);
-bool        reasixty_uf1JogFaderFollows(int mode);
-void        reasixty_setUf1JogFaderFollows(int mode, bool on);
+int         reasixty_uf1JogFaderTargetCount();
+const char* reasixty_uf1JogFaderTargetName(int t);
+int         reasixty_uf1JogFaderTarget(int mode);
+void        reasixty_setUf1JogFaderTarget(int mode, int t);
+// The JOG WHEEL page opens a user mode's turn binding in the ordinary editor,
+// and that editor's "back" returns here. The pane picks it up on its next frame
+// (its selection is a static local of drawBindingsPane).
+static uf8::bindings::ButtonId g_jogPendingSelect = uf8::bindings::ButtonId::None;
 int         reasixty_uf1JogSeqAt(int pos);
 void        reasixty_uf1JogMoveSeq(int pos, int dir);
 // Live jog mode — the nav-cross editor follows it and switching there switches
@@ -953,6 +958,14 @@ const char* hwFaceLabel(ButtonId id)
         case ButtonId::Uf1Vpot4Push:   return "V-POT 4 PUSH";
         case ButtonId::Uf1ChannelPush: return "ENC PUSH";
         case ButtonId::Uf1Jog:         return "JOG";
+        case ButtonId::Uf1JogUser1Left: return "JOG User 1, turn left";
+        case ButtonId::Uf1JogUser1Right: return "JOG User 1, turn right";
+        case ButtonId::Uf1JogUser2Left: return "JOG User 2, turn left";
+        case ButtonId::Uf1JogUser2Right: return "JOG User 2, turn right";
+        case ButtonId::Uf1JogUser3Left: return "JOG User 3, turn left";
+        case ButtonId::Uf1JogUser3Right: return "JOG User 3, turn right";
+        case ButtonId::Uf1JogUser4Left: return "JOG User 4, turn left";
+        case ButtonId::Uf1JogUser4Right: return "JOG User 4, turn right";
         case ButtonId::Uf1ChannelEncoder: return "Channel Encoder";
         case ButtonId::Uf1Foot1:       return "FOOT 1";
         case ButtonId::Uf1Foot2:       return "FOOT 2";
@@ -4970,6 +4983,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     const bool idIsUf1NoLed =
         (id >= ButtonId::Uf1VpotAbovePush && id <= ButtonId::Uf1ChannelPush)
         || id == ButtonId::Uf1Jog            // jog is rotary — no physical LED
+        || uf8::bindings::isUf1JogTurnId(id) // …and so are its user modes' turns
         || id == ButtonId::Uf1ChannelEncoder;  // …and so is the CHANNEL rotation
     const int  quickNum =
         (id == ButtonId::Quick1) ? 1
@@ -4999,6 +5013,11 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         }
     }
     ImGui_Text(ctx, header);
+    if (uf8::bindings::isUf1JogTurnId(id)) {
+        // Not a key on the schematic: the way back is this button.
+        if (ImGui_Button(ctx, "Back to JOG WHEEL##jogback", nullptr, nullptr))
+            g_jogPendingSelect = ButtonId::Uf1Jog;
+    }
     ImGui_Separator(ctx);
 
     ImGui_PushID(ctx, uf8::bindings::toName(id));
@@ -5013,7 +5032,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         // Order + visibility, the same row shape the channel encoder's ring
         // has. The picker walks THIS order (Frank 2026-08-20), and it is what
         // the on-screen carousel shows while SCRUB is held.
-        ImGui_Text(ctx, "Modes (order + visibility)");
+        ImGui_Text(ctx, "Modes (order, visibility, fader)");
         const int jn = reasixty_uf1JogModeCount();
         for (int pos = 0; pos < jn; ++pos) {
             const int m = reasixty_uf1JogSeqAt(pos);
@@ -5031,16 +5050,24 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             } else { ImGui_TextDisabled(ctx, "\xE2\x96\xBC"); }
             ImGui_SameLine(ctx, nullptr, nullptr);
             ImGui_Text(ctx, reasixty_uf1JogModeName(m));
-            // The fader can go with the mode (Frank 25.09.2026); only Items
-            // has a fader target so far.
-            if (reasixty_uf1JogModeHasFader(m)) {
-                ImGui_SameLine(ctx, nullptr, nullptr);
-                bool ff = reasixty_uf1JogFaderFollows(m);
-                if (ImGui_Checkbox(ctx, "Fader = Item Volume##jf", &ff))
-                    reasixty_setUf1JogFaderFollows(m, ff);
-                help_(ctx, "In this mode the fader moves every selected item, "
-                           "keeping their differences.");
+            // The fader can go with the mode (Frank 25.09.2026), every mode
+            // since 16.11.2026. Track = what the fader always does.
+            double fx = 190.0;
+            ImGui_SameLine(ctx, &fx, nullptr);
+            const int ft = reasixty_uf1JogFaderTarget(m);
+            ImGui_SetNextItemWidth(ctx, 190.0);
+            if (ImGui_BeginCombo(ctx, "##jf", reasixty_uf1JogFaderTargetName(ft), nullptr)) {
+                for (int t = 0; t < reasixty_uf1JogFaderTargetCount(); ++t) {
+                    bool sel = (t == ft);
+                    if (ImGui_Selectable(ctx, reasixty_uf1JogFaderTargetName(t), &sel,
+                                         nullptr, nullptr, nullptr) && t != ft)
+                        reasixty_setUf1JogFaderTarget(m, t);
+                }
+                ImGui_EndCombo(ctx);
             }
+            if (pos == 0)
+                help_(ctx, "What the fader moves in this mode. Item and take volume "
+                           "move every selected item and keep their differences.");
             ImGui_PopID(ctx);
         }
         ImGui_Spacing(ctx);
@@ -5106,10 +5133,78 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             help_(ctx, "SHIFT + left loops this long, centred on the cut nearest the cursor.\n"
                        "The UF8's Lanes cross uses it too.");
         }
+        // ⇨ THE USER'S OWN JOG MODE, when it is the live one
+        // (docs/uf1-user-jog-modes-plan.md): name, kind, divider, and the way
+        // into its two turn bindings. The bindings are edited in the ordinary
+        // editor; this page only says what they are for.
+        if (liveJm >= uf8::bindings::kUf1JogFirstUserMode
+            && liveJm < uf8::bindings::kUf1JogFirstUserMode + uf8::bindings::kUf1JogUserModes) {
+            namespace bnd = uf8::bindings;
+            const int slot = liveJm - bnd::kUf1JogFirstUserMode;
+            bnd::Uf1JogUserMode um = bnd::getUf1JogUser(slot);
+            ImGui_Separator(ctx);
+            char hdr[48]; snprintf(hdr, sizeof(hdr), "Own jog mode %d", slot + 1);
+            ImGui_Text(ctx, hdr);
+            static char nameBuf[bnd::kUf1JogUserModes][bnd::kUf1JogUserNameMax + 1] = {};
+            static std::string nameSeen[bnd::kUf1JogUserModes];
+            if (nameSeen[slot] != um.name) {
+                nameSeen[slot] = um.name;
+                snprintf(nameBuf[slot], sizeof(nameBuf[slot]), "%s", um.name.c_str());
+            }
+            int nf = 0;
+            ImGui_SetNextItemWidth(ctx, 140.0);
+            if (ImGui_InputText(ctx, "Name##jogusrname", nameBuf[slot], sizeof(nameBuf[slot]),
+                                &nf, nullptr)) {
+                um.name = nameBuf[slot];
+                nameSeen[slot] = um.name;
+                bnd::setUf1JogUser(slot, um);
+            }
+            help_(ctx, "8 characters, shown on the UF1. Empty: User 1 to User 4.");
+            if (ImGui_RadioButton(ctx, "Left / right##jogusrkind", !um.relative)) {
+                um.relative = false; bnd::setUf1JogUser(slot, um);
+            }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_RadioButton(ctx, "One action with direction##jogusrkind", um.relative)) {
+                um.relative = true; bnd::setUf1JogUser(slot, um);
+            }
+            help_(ctx, "Left / right: each detent fires the left or the right action.\n"
+                       "One action with direction: the action gets the detents with their "
+                       "direction, for REAPER actions marked MIDI CC relative (scroll, zoom, "
+                       "scrub) and Rea-Sixty actions that step.");
+            int dv = um.divider;
+            ImGui_SetNextItemWidth(ctx, 140.0);
+            if (ImGui_InputInt(ctx, "Detents per step##jogusrdiv", &dv, nullptr, nullptr, nullptr)) {
+                um.divider = std::clamp(dv, 1, bnd::kUf1JogUserDividerMax);
+                bnd::setUf1JogUser(slot, um);
+            }
+            help_(ctx, "SHIFT without an action of its own makes it finer, by Shift fine div.");
+            auto actionLine = [&](bool right, const char* btn) {
+                const bnd::ButtonId tid = bnd::uf1JogUserTurnId(slot, right);
+                if (ImGui_Button(ctx, btn, nullptr, nullptr)) g_jogPendingSelect = tid;
+                const bnd::Binding b = bnd::getBinding(layer, tid);
+                const bnd::ActionSlot& pl = b.shortPress[static_cast<int>(bnd::Modifier::Plain)];
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                std::string what;
+                if (pl.action.empty())                        what = "(no action)";
+                else if (pl.type == bnd::ActionType::Reaper)  what = reasixty_resolveActionName(pl.action);
+                else if (pl.type == bnd::ActionType::Builtin) what = bnd::builtinDisplayName(pl.action);
+                else                                          what = pl.action;
+                ImGui_TextDisabled(ctx, what.c_str());
+            };
+            if (um.relative) {
+                actionLine(true, "Action...##jogusract");
+            } else {
+                actionLine(false, "Turn left...##jogusrl");
+                actionLine(true,  "Turn right...##jogusrr");
+            }
+            if (!reasixty_uf1JogModeVisible(liveJm))
+                ImGui_TextDisabled(ctx, "Hidden: tick it in the list above to reach it with SCRUB + jog.");
+        }
         // Per-mode TIME axis unit + amount, for the live mode only. Razor (4)
         // has no time axis at the wheel, so it shows none of this; Lanes (6)
-        // steps lanes, at the picker's rate, so neither does it.
-        if (liveJm != 4 && liveJm != 6) {
+        // steps lanes, at the picker's rate, so neither does it, and the
+        // user's own modes count detents.
+        if (liveJm != 4 && liveJm != 6 && liveJm < uf8::bindings::kUf1JogFirstUserMode) {
             const int m = liveJm;
             const int unit = reasixty_uf1JogUnit(m);   // 0 sec, 1 zoom, 2 grid
             ImGui_Text(ctx, reasixty_uf1JogModeName(m));
@@ -5156,7 +5251,8 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     const bool isEncoder = (id == ButtonId::ChannelEncoder
                           || id == ButtonId::Uc1Encoder1
                           || id == ButtonId::Uc1Encoder2
-                          || id == ButtonId::Uf1ChannelEncoder);
+                          || id == ButtonId::Uf1ChannelEncoder
+                          || uf8::bindings::isUf1JogTurnId(id));
     // ⇨ THE UF8 PUSH HAS NO LONG PRESS: holding it picks the encoder mode, and
     // letting go unturned is a change of mind (Frank 02.10.2026). Every mode's
     // own PUSH too.
@@ -7687,6 +7783,10 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // auf Layer 1 (Forum 12.10.2026, ctxSoftKeyLayer_).
     const int       s_bindLayer = getActiveLayer();
     static ButtonId s_selected  = ButtonId::None;
+    if (g_jogPendingSelect != ButtonId::None) {
+        s_selected = g_jogPendingSelect;
+        g_jogPendingSelect = ButtonId::None;
+    }
 
     // This pane is painting: it owns the surface's set until it stops (see
     // reasixty_publishSettingsModifierPin, which consumes and clears this).

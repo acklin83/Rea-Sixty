@@ -896,9 +896,33 @@ pick the object.
 | **Razor** | Moves the razor edit — which edge, see below. |
 | **Fades** | Changes a fade length, 10 ms per count. Where there is a neighbour it is the crossfade. See *Fades* below. |
 | **Lanes** | Moves the edit cursor, at the Playhead object's step. With `SHIFT` it plays the next lane of the selected track, or, on a track with a comp lane, gives the comp area under the edit cursor the next take. See the chapter *Fixed lanes*. |
+| **User 1** to **User 4** | What you give them. Hidden until you switch them on. See *Your own jog modes* below. |
 
 The arrow cross **selects**, the jog **moves**. That split is the whole idea: you
 never have to let go of the wheel to change what you are working on.
+
+## Your own jog modes
+
+Four more objects, *User 1* to *User 4*, do what you give them. They start hidden. Under
+*Settings → Bindings → UF1 → JOG WHEEL*, tick one in the list so `SCRUB` and the jog reach
+it, then switch the wheel to it. Its settings show below the list:
+
+- **Name**: up to 8 characters, shown on the UF1 and in the mode banner.
+- **Left / right**: each detent to the left fires the *Turn left* action, each detent to
+  the right the *Turn right* action. For anything that goes one step at a time: next
+  marker, next track, next take, a script.
+- **One action with direction**: the action gets the detents together with their
+  direction, the way REAPER takes a MIDI controller set to relative. That suits REAPER's
+  actions marked *(MIDI CC relative/mousewheel)*, such as *View: Zoom horizontally* or
+  *View: Scroll vertically*, and Rea-Sixty's own stepping actions such as *Encoder: cycle
+  FX*.
+- **Detents per step**: how many detents make one step. At 1 every detent fires.
+
+*Turn left...* and *Turn right...* (or *Action...*) open the binding in the editor, with a
+row per modifier as on any key. `SHIFT` without an action of its own runs the plain one,
+finer by *Shift fine div*. The nav cross has keys of its own in each of the four, as in
+every other object. Many REAPER actions make an undo step each time they run, so one turn
+of the jog can make a lot of them.
 
 ## What the cross does in each object
 
@@ -930,16 +954,27 @@ by the modifier.
 
 The cross keys light to show the Razor target you have aimed at.
 
-**Items can take the fader.** Under *Settings → Bindings → UF1 → JOG WHEEL*, tick
-*Fader = Item Volume* on the Items row. With the jog on Items, the UF1 fader then sets
-the volume of every selected item: the first one follows the fader, the others change by
-the same number of dB, so the differences between them stay. The motor follows the first
-item. With no item selected the fader stays where it is and the channel display reads
-*no item*.
+**The fader can go with the object.** Under *Settings → Bindings → UF1 → JOG WHEEL*,
+every object in the list has a menu for the fader:
+
+- *Track*: the fader does what it always does. This is the factory setting.
+- *Item volume*: the fader sets the volume of every selected item. The first one follows
+  the fader, the others change by the same number of dB, so the differences between them
+  stay. The motor follows the first item.
+- *Take volume*: the same for the active take of every selected item. A take with its
+  polarity flipped keeps it.
+- *Last touched parameter*: the fader moves the plug-in parameter you touched last.
+  Touch automation records it as it does on the strip.
+
+The channel display names what the fader moves (*Item Vol*, *Take Vol*, the parameter's
+name). With nothing to move it reads *no item*, *no take* or *no param*, and the fader
+stays where it is. What the fader moves is fixed the moment you take hold of it:
+switching the object or turning another plug-in knob while your hand is on it changes
+nothing until you let go. Each grab on item or take volume is one undo step.
 
 **Everything in that table is a factory default, not a fixed rule.** Each cross
-key holds its own binding *per object*, so the same physical key can do seven
-different things and you decide all seven. Click a cross key in **Settings →
+key holds its own binding *per object*, so the same physical key can do eleven
+different things and you decide all eleven. Click a cross key in **Settings →
 Bindings → UF1** and pick the object at the top of the editor: the picker follows
 the surface, and changing it there changes the wheel's object too, so what you
 edit is always what you are holding. The Shift row is a binding as well, which is
@@ -2429,7 +2464,7 @@ Which object the UF1's jog wheel is working on (see the chapter **Jog Mode**). T
 usual picker is `SCRUB` held plus a turn of the wheel; these actions put the same
 choice on a button. Each direct setter lights while its object is the live one.
 
-- **UF1 Jog Mode: cycle** steps to the next object.
+- **UF1 Jog Mode: cycle** steps to the next object you have ticked in the list.
 - **UF1 Jog Mode: Playhead** puts the wheel on the play cursor.
 - **UF1 Jog Mode: Scrub** puts it on audible scrub.
 - **UF1 Jog Mode: Items** puts it on the selected items.
@@ -2437,6 +2472,7 @@ choice on a button. Each direct setter lights while its object is the live one.
 - **UF1 Jog Mode: Razor Edit** puts it on the razor edit.
 - **UF1 Jog Mode: Fades** puts it on the fades of the selected items.
 - **UF1 Jog Mode: Lanes** puts it on the fixed lanes of the selected track.
+- **UF1 Jog Mode: User 1** to **User 4** put it on one of your own jog modes.
 
 ## Lanes
 

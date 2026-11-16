@@ -901,6 +901,13 @@ if(NOT WIN32)
     target_link_libraries(test_uf8_enc_keys PRIVATE Threads::Threads)
     add_test(NAME uf8_enc_keys COMMAND test_uf8_enc_keys)
 
+    # The UF1's own jog modes: turn arithmetic, ids, nav cross, v58 upgrade, slots.
+    add_executable(test_uf1_jog_user tests/test_uf1_jog_user.cpp
+        src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp)
+    target_include_directories(test_uf1_jog_user PRIVATE src "${WDL_DIR}")
+    target_link_libraries(test_uf1_jog_user PRIVATE Threads::Threads)
+    add_test(NAME uf1_jog_user COMMAND test_uf1_jog_user)
+
     # The UC1's send queue: LED writes for one cell collapse to the newest.
     add_executable(test_uc1_send_queue tests/test_uc1_send_queue.cpp)
     target_include_directories(test_uc1_send_queue PRIVATE src)

@@ -177,6 +177,10 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf1NavUpRazor, "uf1_nav_up_razor" },
     { ButtonId::Uf1NavUpFades, "uf1_nav_up_fades" },
     { ButtonId::Uf1NavUpLanes, "uf1_nav_up_lanes" },
+    { ButtonId::Uf1NavUpUser1, "uf1_nav_up_user1" },
+    { ButtonId::Uf1NavUpUser2, "uf1_nav_up_user2" },
+    { ButtonId::Uf1NavUpUser3, "uf1_nav_up_user3" },
+    { ButtonId::Uf1NavUpUser4, "uf1_nav_up_user4" },
     { ButtonId::Uf1NavLeftPlayhead, "uf1_nav_left_playhead" },
     { ButtonId::Uf1NavLeftScrub, "uf1_nav_left_scrub" },
     { ButtonId::Uf1NavLeftItems, "uf1_nav_left_items" },
@@ -184,6 +188,10 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf1NavLeftRazor, "uf1_nav_left_razor" },
     { ButtonId::Uf1NavLeftFades, "uf1_nav_left_fades" },
     { ButtonId::Uf1NavLeftLanes, "uf1_nav_left_lanes" },
+    { ButtonId::Uf1NavLeftUser1, "uf1_nav_left_user1" },
+    { ButtonId::Uf1NavLeftUser2, "uf1_nav_left_user2" },
+    { ButtonId::Uf1NavLeftUser3, "uf1_nav_left_user3" },
+    { ButtonId::Uf1NavLeftUser4, "uf1_nav_left_user4" },
     { ButtonId::Uf1NavCentrePlayhead, "uf1_nav_centre_playhead" },
     { ButtonId::Uf1NavCentreScrub, "uf1_nav_centre_scrub" },
     { ButtonId::Uf1NavCentreItems, "uf1_nav_centre_items" },
@@ -191,6 +199,10 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf1NavCentreRazor, "uf1_nav_centre_razor" },
     { ButtonId::Uf1NavCentreFades, "uf1_nav_centre_fades" },
     { ButtonId::Uf1NavCentreLanes, "uf1_nav_centre_lanes" },
+    { ButtonId::Uf1NavCentreUser1, "uf1_nav_centre_user1" },
+    { ButtonId::Uf1NavCentreUser2, "uf1_nav_centre_user2" },
+    { ButtonId::Uf1NavCentreUser3, "uf1_nav_centre_user3" },
+    { ButtonId::Uf1NavCentreUser4, "uf1_nav_centre_user4" },
     { ButtonId::Uf1NavRightPlayhead, "uf1_nav_right_playhead" },
     { ButtonId::Uf1NavRightScrub, "uf1_nav_right_scrub" },
     { ButtonId::Uf1NavRightItems, "uf1_nav_right_items" },
@@ -198,6 +210,10 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf1NavRightRazor, "uf1_nav_right_razor" },
     { ButtonId::Uf1NavRightFades, "uf1_nav_right_fades" },
     { ButtonId::Uf1NavRightLanes, "uf1_nav_right_lanes" },
+    { ButtonId::Uf1NavRightUser1, "uf1_nav_right_user1" },
+    { ButtonId::Uf1NavRightUser2, "uf1_nav_right_user2" },
+    { ButtonId::Uf1NavRightUser3, "uf1_nav_right_user3" },
+    { ButtonId::Uf1NavRightUser4, "uf1_nav_right_user4" },
     { ButtonId::Uf1NavDownPlayhead, "uf1_nav_down_playhead" },
     { ButtonId::Uf1NavDownScrub, "uf1_nav_down_scrub" },
     { ButtonId::Uf1NavDownItems, "uf1_nav_down_items" },
@@ -205,6 +221,10 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf1NavDownRazor, "uf1_nav_down_razor" },
     { ButtonId::Uf1NavDownFades, "uf1_nav_down_fades" },
     { ButtonId::Uf1NavDownLanes, "uf1_nav_down_lanes" },
+    { ButtonId::Uf1NavDownUser1, "uf1_nav_down_user1" },
+    { ButtonId::Uf1NavDownUser2, "uf1_nav_down_user2" },
+    { ButtonId::Uf1NavDownUser3, "uf1_nav_down_user3" },
+    { ButtonId::Uf1NavDownUser4, "uf1_nav_down_user4" },
     { ButtonId::Uf1SecLeft,       "uf1_sec_left"        },
     { ButtonId::Uf1SecRight,      "uf1_sec_right"       },
     { ButtonId::Uf1Cycle,         "uf1_cycle"           },
@@ -238,6 +258,14 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf1ChannelSoftKeySends,    "uf1_channel_soft_sends" },
     { ButtonId::Uf1Foot1,         "uf1_foot_1"          },
     { ButtonId::Uf1Foot2,         "uf1_foot_2"          },
+    { ButtonId::Uf1JogUser1Left, "uf1_jog_user1_left" },
+    { ButtonId::Uf1JogUser1Right, "uf1_jog_user1_right" },
+    { ButtonId::Uf1JogUser2Left, "uf1_jog_user2_left" },
+    { ButtonId::Uf1JogUser2Right, "uf1_jog_user2_right" },
+    { ButtonId::Uf1JogUser3Left, "uf1_jog_user3_left" },
+    { ButtonId::Uf1JogUser3Right, "uf1_jog_user3_right" },
+    { ButtonId::Uf1JogUser4Left, "uf1_jog_user4_left" },
+    { ButtonId::Uf1JogUser4Right, "uf1_jog_user4_right" },
     { ButtonId::Uf1Jog,           "uf1_jog"             },
     { ButtonId::Uf8EncZoomUpChSelect, "uf8_enc_zoom_up_ch_select" },
     { ButtonId::Uf8EncZoomUpNudge, "uf8_enc_zoom_up_nudge" },
@@ -2552,6 +2580,29 @@ void serializeUf1SoftBankNames_(const Config& c, std::ostringstream& os)
     os << "\n  ]";
 }
 
+// The UF1's own jog modes (v58). Only slots that differ from a fresh one are
+// written, so a config that never touches them stays byte-identical.
+void serializeUf1JogUser_(const Config& c, std::ostringstream& os)
+{
+    const Uf1JogUserMode fresh{};
+    bool any = false;
+    for (int i = 0; i < kUf1JogUserModes; ++i) if (!(c.uf1JogUser[i] == fresh)) any = true;
+    if (!any) return;
+    os << ",\n  \"uf1_jog_user\": [";
+    bool first = true;
+    for (int i = 0; i < kUf1JogUserModes; ++i) {
+        const Uf1JogUserMode& m = c.uf1JogUser[i];
+        if (m == fresh) continue;
+        if (!first) os << ",";
+        first = false;
+        os << "\n    {\"slot\": " << i << ", \"name\": ";
+        appendEscaped(os, m.name);
+        os << ", \"relative\": " << (m.relative ? "true" : "false")
+           << ", \"divider\": " << m.divider << "}";
+    }
+    os << "\n  ]";
+}
+
 std::string serialize(const Config& c)
 {
     std::ostringstream os;
@@ -2575,6 +2626,7 @@ std::string serialize(const Config& c)
     serializeSoftKeySetNames_(c, os);
     serializeUf8SubBankNames_(c, os);
     serializeUf1SoftBankNames_(c, os);
+    serializeUf1JogUser_(c, os);
     serializeCcPresets_(c, os);
     os << "\n}\n";
     return os.str();
@@ -3108,6 +3160,31 @@ void parseUf8SubBankNames_(wdl_json_element* root, Config& out)
     }
 }
 
+void parseUf1JogUser_(wdl_json_element* root, Config& out)
+{
+    auto* arr = root->get_item_by_name("uf1_jog_user");
+    if (!arr || !arr->is_array() || !arr->m_array) return;
+    const int n = arr->m_array->GetSize();
+    for (int i = 0; i < n; ++i) {
+        wdl_json_element* eo = arr->enum_item(i);
+        if (!eo || !eo->is_object()) continue;
+        int slot = -1;
+        if (auto* v = eo->get_item_by_name("slot"))
+            if (auto* t = v->get_string_value(true)) slot = std::atoi(t);
+        if (slot < 0 || slot >= kUf1JogUserModes) continue;
+        Uf1JogUserMode& m = out.uf1JogUser[slot];
+        if (auto* v = eo->get_item_by_name("name"))
+            if (auto* t = v->get_string_value(true))
+                m.name = std::string(t).substr(0, kUf1JogUserNameMax);
+        if (auto* v = eo->get_item_by_name("relative"))
+            if (auto* t = v->get_string_value(true))
+                m.relative = std::strcmp(t, "true") == 0 || std::atoi(t) != 0;
+        if (auto* v = eo->get_item_by_name("divider"))
+            if (auto* t = v->get_string_value(true))
+                m.divider = std::clamp(std::atoi(t), 1, kUf1JogUserDividerMax);
+    }
+}
+
 void parseUf1SoftBankNames_(wdl_json_element* root, Config& out)
 {
     auto* arr = root->get_item_by_name("uf1_soft_bank_names");
@@ -3505,6 +3582,7 @@ bool tryParse_(const std::string& json, Config& out)
     parseSoftKeySetNames_(root, out);
     parseUf8SubBankNames_(root, out);
     parseUf1SoftBankNames_(root, out);
+    parseUf1JogUser_(root, out);
     parseCcPresets_(root, out);
     return true;
 }
@@ -3730,7 +3808,11 @@ bool invokeBuiltin(const std::string& name, int param)
 // v56 (2026-10-29): Shift + Layer 2 / 3 enter the Hue / DynaMount UF8
 // side-car, where that Shift slot is still empty (seedShiftLayerSideCars_).
 // v57 (2026-10-29): Shift + Layer 1 enters the TotalMix side-car the same way.
-constexpr int kCurrentBindingsVersion = 57;
+// v58 (2026-11-16): the UF1's own jog modes. Four more modes on the nav cross
+// (Uf1Nav*User1..4, seeded from the physical keys by fillDerivedUf1Slots_), two
+// turn bindings per slot (Uf1JogUserNLeft / Right, empty) and uf1_jog_user
+// (name, kind, divider). Additive: a file without them has four empty slots.
+constexpr int kCurrentBindingsVersion = 58;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -5044,6 +5126,9 @@ void load()
             }
             if (tmp.version < 57) {   // v56 seeded 2 / 3, v57 adds 1; empty slots only
                 for (Layer& L : tmp.layers) seedShiftLayerSideCars_(L.bindings);
+            }
+            if (tmp.version < 58) {
+                fillDerivedUf1Slots_(tmp);   // the cross of the four new jog modes
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -6796,6 +6881,73 @@ bool dispatchEncoder(ButtonId id, int stepDelta)
     // builtins (toggles etc.) ignore it and fire once per detent.
     bit->second.run(/*firing*/ true, /*pressed*/ false, /*param*/ stepDelta);
     return true;
+}
+
+bool resolveTurnSlot(ButtonId id, ActionSlot& out, bool& own)
+{
+    own = false;
+    if (!isUf1JogTurnId(id)) return false;
+    Binding bd;
+    {
+        std::lock_guard<std::mutex> lk(g_cfgMutex);
+        int layer = g_cfg.activeLayer;
+        if (layer < 0 || layer > 2) layer = 0;
+        layer = applyLayerOption(layer, id);
+        auto it = g_cfg.layers[layer].bindings.find(id);
+        if (it == g_cfg.layers[layer].bindings.end()) return false;
+        bd = it->second;
+    }
+    const int m = static_cast<int>(currentModifierSnapshot());
+    if (m < 0 || m >= kModifierCount) return false;
+    // Same Plain fallback as every key (fireResolvedSlot_), told apart so the
+    // caller can make an empty Shift mean "finer".
+    if (!slotIsEmpty_(bd.shortPress[m])) {
+        own = true;
+        out = bd.shortPress[m];
+        return true;
+    }
+    const ActionSlot& pl = bd.shortPress[static_cast<int>(Modifier::Plain)];
+    if (slotIsEmpty_(pl)) return false;
+    out = pl;
+    return true;
+}
+
+void runPressSlot(const ActionSlot& s)
+{
+    if (slotIsEmpty_(s)) return;
+    runSlot_(s, /*firing*/ true, /*pressed*/ true);
+}
+
+bool runSlotWithStep(const ActionSlot& s, int step)
+{
+    if (slotIsEmpty_(s) || step == 0) return false;
+    if (s.type != ActionType::Builtin) {
+        runSlot_(s, /*firing*/ true, /*pressed*/ false);
+        return true;
+    }
+    auto bit = g_builtins.find(s.action);
+    if (bit == g_builtins.end() || !bit->second.run) return false;
+    bit->second.run(/*firing*/ true, /*pressed*/ false, /*param*/ step);
+    return true;
+}
+
+Uf1JogUserMode getUf1JogUser(int slot)
+{
+    if (slot < 0 || slot >= kUf1JogUserModes) return {};
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return g_cfg.uf1JogUser[slot];
+}
+
+void setUf1JogUser(int slot, const Uf1JogUserMode& m)
+{
+    if (slot < 0 || slot >= kUf1JogUserModes) return;
+    Uf1JogUserMode v = m;
+    if (static_cast<int>(v.name.size()) > kUf1JogUserNameMax) v.name.resize(kUf1JogUserNameMax);
+    v.divider = std::clamp(v.divider, 1, kUf1JogUserDividerMax);
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (g_cfg.uf1JogUser[slot] == v) return;
+    g_cfg.uf1JogUser[slot] = v;
+    persistLocked_();
 }
 
 static bool userQuickSlotInRange_(int layer, int quick, int subBank, int slot)
@@ -9497,6 +9649,18 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "jog_mode_lanes",
       "UF1. The jog wheel steps through the fixed lanes of the selected track, "
       "one lane playing at a time." },
+    { "jog_mode_user1",
+      "UF1. The jog wheel fires the actions you gave your own jog mode 1, under "
+      "Settings, Bindings, UF1, JOG WHEEL." },
+    { "jog_mode_user2",
+      "UF1. The jog wheel fires the actions you gave your own jog mode 2, under "
+      "Settings, Bindings, UF1, JOG WHEEL." },
+    { "jog_mode_user3",
+      "UF1. The jog wheel fires the actions you gave your own jog mode 3, under "
+      "Settings, Bindings, UF1, JOG WHEEL." },
+    { "jog_mode_user4",
+      "UF1. The jog wheel fires the actions you gave your own jog mode 4, under "
+      "Settings, Bindings, UF1, JOG WHEEL." },
     { "encoder_lanes",
       "Channel Encoder steps through the fixed lanes of the selected track, "
       "one lane playing at a time." },
@@ -9880,6 +10044,10 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "jog_mode_envelope", "Jog Env" },
     { "jog_mode_fades", "Jog Fades" },
     { "jog_mode_lanes", "Jog Lanes" },
+    { "jog_mode_user1", "Jog Usr1" },
+    { "jog_mode_user2", "Jog Usr2" },
+    { "jog_mode_user3", "Jog Usr3" },
+    { "jog_mode_user4", "Jog Usr4" },
     { "encoder_lanes", "Enc Lanes" },
     { "lane_next", "Lane Next" },
     { "lane_prev", "Lane Prev" },
