@@ -31,8 +31,16 @@ def main(notes_path, ext_path, threshold=0.34):
     # Überschrift PLUS der Satz dahinter. Eine Überschrift wie "Stability."
     # trägt keine Inhaltswörter; erst der Absatz sagt, wovon sie handelt, und
     # ohne ihn schlägt der Wächter grundlos an.
+    # Since v0.8 the sections are bullets ("- **UF1 Meter view:** ..."), and
+    # only the What's new part counts: Install and Manual install carry bold
+    # bullets too (macOS, Windows, Linux) that no changelog repeats. The old
+    # pattern matched only a line starting with "**" and passed v0.9.2 on a
+    # single section.
+    m_new = re.search(r"^## What's new\n(.*?)(?=^## |\Z)", notes, re.M | re.S)
+    if m_new:
+        notes = m_new.group(1)
     heads = []
-    for m in re.finditer(r"^\*\*([^*]+)\*\*(.*)$", notes, re.M):
+    for m in re.finditer(r"^(?:- )?\*\*([^*]+)\*\*(.*)$", notes, re.M):
         tail = m.group(2).strip()
         heads.append((m.group(1).strip(), (m.group(1) + ' ' + tail[:220]).strip()))
 
