@@ -32,3 +32,6 @@ Frank: in Items jog mode the arrows picked items from another lane than the acti
 
 ## Nachtrag: Tabelle ohne graue Zeilen
 RowBg raus, Kopfzeile ohne Fuellung, Spalten 36/56/96/136 statt 44/56/130/190 (Frank: graue Zeilen sehen nicht gut aus, zu breit).
+
+## Tag v0.9.3 „Reservoir Jogs“ vorbereitet
+Notes `dist/RELEASE-NOTES-v0.9.3.md`, Handbuch-Version, Codename-Zeile, README-Zeile liegen uncommittet und kommen mit dem Tag in einen Commit. Changelog-Entwurf `.local-docs/changelog-v0.9.3.txt`. Changelog-Waechter las seit den Bullet-Notes nur einen Abschnitt, repariert.
