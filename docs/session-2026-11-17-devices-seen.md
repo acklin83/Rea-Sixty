@@ -35,3 +35,6 @@ RowBg raus, Kopfzeile ohne Fuellung, Spalten 36/56/96/136 statt 44/56/130/190 (F
 
 ## Tag v0.9.3 „Reservoir Jogs“ vorbereitet
 Notes `dist/RELEASE-NOTES-v0.9.3.md`, Handbuch-Version, Codename-Zeile, README-Zeile liegen uncommittet und kommen mit dem Tag in einen Commit. Changelog-Entwurf `.local-docs/changelog-v0.9.3.txt`. Changelog-Waechter las seit den Bullet-Notes nur einen Abschnitt, repariert.
+
+## v0.9.3 „Reservoir Jogs“ RAUS
+Tag auf `f2861074`, CI-Tag-Lauf gruen, GitHub-Release mit 16 Assets, ReaPack 0.9.3 (12 Adressen 200), reasixty.com deployt (Handbuch v0.9.3, 30 Bilder, 9 Routen 200).
