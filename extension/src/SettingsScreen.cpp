@@ -5036,13 +5036,17 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         // headers. Loose SameLines put the names at different x, because a
         // disabled arrow was text and an enabled one a button.
         const int jn = reasixty_uf1JogModeCount();
-        int jtFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_BordersInnerH
+        // No row or header fill (Frank 17.11.2026: the grey rows looked bad),
+        // only the thin lines between rows. Columns as narrow as their content:
+        // names are 8 characters, "Last touched parameter" may clip in the
+        // closed combo, the open list shows it whole.
+        int jtFlags = ImGui_TableFlags_BordersInnerH
                     | ImGui_TableFlags_SizingFixedFit | ImGui_TableFlags_NoHostExtendX;
         if (ImGui_BeginTable(ctx, "##jog_modes", 4, &jtFlags, nullptr, nullptr, nullptr)) {
             const int wFixed = ImGui_TableColumnFlags_WidthFixed;
             int    cf0 = wFixed, cf1 = wFixed, cf2 = wFixed, cf3 = wFixed;
-            double cw0 = scaleW_(ctx, 44.0),  cw1 = scaleW_(ctx, 56.0),
-                   cw2 = scaleW_(ctx, 130.0), cw3 = scaleW_(ctx, 190.0);
+            double cw0 = scaleW_(ctx, 36.0), cw1 = scaleW_(ctx, 56.0),
+                   cw2 = scaleW_(ctx, 96.0), cw3 = scaleW_(ctx, 136.0);
             ImGui_TableSetupColumn(ctx, "Show",  &cf0, &cw0, nullptr);
             ImGui_TableSetupColumn(ctx, "Order", &cf1, &cw1, nullptr);
             ImGui_TableSetupColumn(ctx, "Mode",  &cf2, &cw2, nullptr);
@@ -5050,6 +5054,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             int headerRow = ImGui_TableRowFlags_Headers;
             ImGui_TableNextRow(ctx, &headerRow, nullptr);
             static const char* const kJogCols[4] = { "Show", "Order", "Mode", "Fader" };
+            ImGui_PushStyleColor(ctx, ImGui_Col_TableHeaderBg, 0x00000000);
             for (int c = 0; c < 4; ++c) {
                 ImGui_TableSetColumnIndex(ctx, c);
                 ImGui_TableHeader(ctx, kJogCols[c]);
@@ -5057,6 +5062,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                 if (c == 3) help_(ctx, "What the fader moves in this mode. Item and take volume "
                                        "move every selected item and keep their differences.");
             }
+            { int n = 1; ImGui_PopStyleColor(ctx, &n); }
             // An arrow with nowhere to go is the same button, dimmed and dead,
             // so both arrows sit at the same place in every row.
             const int colBtn = ImGui_GetStyleColor(ctx, ImGui_Col_Button);
