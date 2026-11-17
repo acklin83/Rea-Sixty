@@ -908,6 +908,11 @@ if(NOT WIN32)
     target_link_libraries(test_uf1_jog_user PRIVATE Threads::Threads)
     add_test(NAME uf1_jog_user COMMAND test_uf1_jog_user)
 
+    # The device inventory: a surface ORC held at REAPER start stays in it.
+    add_executable(test_devices_seen tests/test_devices_seen.cpp)
+    target_include_directories(test_devices_seen PRIVATE src)
+    add_test(NAME devices_seen COMMAND test_devices_seen)
+
     # The UC1's send queue: LED writes for one cell collapse to the newest.
     add_executable(test_uc1_send_queue tests/test_uc1_send_queue.cpp)
     target_include_directories(test_uc1_send_queue PRIVATE src)

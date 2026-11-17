@@ -148,6 +148,7 @@
 #include "SetupBundle.h"
 #include "MidiCcLayer.h"
 #include "JogUserTurn.h"
+#include "DevicesSeen.h"
 #include "input_level_jsfx.h"  // generated: uf8::setup_bundle::kInputLevelJsfx{Bytes,Size}
 #include "inserts_overlay_lua.h"  // generated: uf8::setup_bundle::kInsertsOverlayLua{Bytes,Size}
 #include "assignment_hud_lua.h"   // generated: uf8::setup_bundle::kAssignmentHudLua{Bytes,Size}
@@ -1772,12 +1773,17 @@ std::atomic<bool>         g_showAbsentDeviceSettings{false};
 // Stamp a surface into the inventory. Called from each device's open path, so
 // it runs at most a handful of times per REAPER session and only ever writes
 // ExtState when the bit is actually new.
+// ⛔ Against the STORED inventory too (DevicesSeen.h): at start this runs before
+// loadBrightness has read it, and every reopen path must call it as well.
 void markDeviceSeen_(int bit)
 {
-    const int prev = g_devicesSeen.fetch_or(bit);
-    if ((prev & bit) == bit) return;                 // already known
+    const char* v = GetExtState("rea_sixty", "devices_seen");
+    const int stored = (v && *v) ? (std::atoi(v) & devseen::kAll) : 0;
+    const devseen::Mark m = devseen::mark(stored, g_devicesSeen.load(), bit);
+    g_devicesSeen.fetch_or(m.mask);
+    if (!m.write) return;
     char buf[8];
-    snprintf(buf, sizeof(buf), "%d", (prev | bit) & 0b111);
+    snprintf(buf, sizeof(buf), "%d", m.mask);
     SetExtState("rea_sixty", "devices_seen", buf, true);
 }
 // Bit per surface, matching bindings::builtinDeviceMask().
@@ -50038,6 +50044,7 @@ void onTimerBody_()
                         staleLog("rea_sixty_uc1_stale.log", "UC1 reopened after retry");
                     sUc1Lost = false; sUc1Err.clear();
                     g_uc1WantRetry.store(false);
+                    markDeviceSeen_(kSeenUc1);   // a UC1 that came late is still a UC1
                     g_uc1_surface = std::make_unique<uc1::UC1Surface>();
                     g_uc1_surface->attach(*g_uc1_dev);
                     if (auto* tr = GetLastTouchedTrack()) {
@@ -50069,6 +50076,9 @@ void onTimerBody_()
                         staleLog("rea_sixty_uf8_stale.log", "UF8 reopened after retry");
                     sUf8Lost = false; sUf8Err.clear();
                     g_uf8WantRetry.store(false);
+                    // ⇨ A UF8 that ORC handed over after the start is a UF8 too:
+                    // without this the Bindings pane had no UF8 tab (forum 17.11.).
+                    markDeviceSeen_(kSeenUf8);
                     g_sync = std::make_unique<uf8::ColorSync>(*g_dev);
                     g_sync->invalidate();
                     g_dev->setRawInputHandler(onUf8Input);
