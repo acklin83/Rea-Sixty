@@ -5,7 +5,7 @@ author: |
   Frank Acklin
   \
   [www.stoersender-studio.ch](https://www.stoersender-studio.ch)
-date: v0.9.2
+date: v0.9.3
 documentclass: article
 geometry: margin=2.5cm
 fontsize: 11pt
@@ -37,7 +37,7 @@ Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no 
 
 ## Versioning
 
-This manual documents Rea-Sixty v0.9.2. Earlier manuals (anything dated before 2026-09-06) are superseded.
+This manual documents Rea-Sixty v0.9.3. Earlier manuals (anything dated before 2026-09-06) are superseded.
 
 Each release also carries a codename, shown on the **About** tab below the version. The codename has no functional role — just makes the release easier to refer to in conversation.
 
@@ -932,7 +932,7 @@ The cross is not one thing either — it follows the object, exactly like the wh
 |---|---|---|---|
 | **Playhead** | Zoom out / in horizontally. | Zoom in / out vertically. | Zoom to fit the project. |
 | **Scrub** | As Playhead. | As Playhead. | As Playhead. |
-| **Items** | Select the previous / next item on the track. | Select the item on the track above / below. | **Hold** it and the wheel drags the selected items as one move; release drops them. Press and let go without turning and it zooms to the selected items instead, press again to come back. |
+| **Items** | Select the previous / next item on the track. On a track with fixed lanes only the lanes that play count, for up / down too. | Select the item on the track above / below. | **Hold** it and the wheel drags the selected items as one move; release drops them. Press and let go without turning and it zooms to the selected items instead, press again to come back. |
 | **Envelope** | Select the previous / next point. Once the play cursor has moved, the next arrow starts from where the cursor now is rather than from the point that was selected before it moved, so nudging the playhead and reaching for an arrow lands where you are looking. | Switch envelope lane. | Toggle what the jog edits: the selected **points** or the **playhead**. No zoom here, nudging the cursor while shaping an envelope is worth more. **Shift +** centre inserts a point at the cursor. |
 | **Razor** | Aim at the **left** / **right** edge. | Aim at the **top** / **bottom** edge. | **Hold** it to take the **whole area** and drag its content. See *Razor* below. |
 | **Fades**, aiming | Aim at the **fade-in** / **fade-out**. | Next / previous fade type. | Switch the cross over to walking the items. |
