@@ -29,3 +29,6 @@ Show / Order / Mode / Fader columns with headers. A missing arrow is the same sm
 
 ## Item arrows on fixed lanes `7064f17c`
 Frank: in Items jog mode the arrows picked items from another lane than the active one. `uf1SelectAdjacentItem_` and `uf1NearestItemOnTrack_` never checked the lane (unchanged since 15.09.; fixed lanes came 01.10.). They now skip items whose lane does not play, via `itemLanePlays_` (shared with the UC1 input meter). Group mates that REAPER's 40034 pulls in are not filtered.
+
+## Nachtrag: Tabelle ohne graue Zeilen
+RowBg raus, Kopfzeile ohne Fuellung, Spalten 36/56/96/136 statt 44/56/130/190 (Frank: graue Zeilen sehen nicht gut aus, zu breit).
