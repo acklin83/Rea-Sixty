@@ -5032,68 +5032,106 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         // Order + visibility, the same row shape the channel encoder's ring
         // has. The picker walks THIS order (Frank 2026-08-20), and it is what
         // the on-screen carousel shows while SCRUB is held.
-        ImGui_Text(ctx, "Modes (order, visibility, fader)");
+        // ⇨ A TABLE (Frank 17.11.2026): one column per thing a row sets, with
+        // headers. Loose SameLines put the names at different x, because a
+        // disabled arrow was text and an enabled one a button.
         const int jn = reasixty_uf1JogModeCount();
-        for (int pos = 0; pos < jn; ++pos) {
-            const int m = reasixty_uf1JogSeqAt(pos);
-            char rowId[24]; snprintf(rowId, sizeof(rowId), "jogmode_%d", pos);
-            ImGui_PushID(ctx, rowId);
-            bool vis = reasixty_uf1JogModeVisible(m);
-            if (ImGui_Checkbox(ctx, "##vis", &vis)) reasixty_setUf1JogModeVisible(m, vis);
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (pos > 0) {
-                if (ImGui_SmallButton(ctx, "\xE2\x96\xB2##up")) reasixty_uf1JogMoveSeq(pos, -1);
-            } else { ImGui_TextDisabled(ctx, "\xE2\x96\xB2"); }
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (pos < jn - 1) {
-                if (ImGui_SmallButton(ctx, "\xE2\x96\xBC##dn")) reasixty_uf1JogMoveSeq(pos, +1);
-            } else { ImGui_TextDisabled(ctx, "\xE2\x96\xBC"); }
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            // The user's own modes are named right here, in their row (Frank
-            // 16.11.2026: "namensfeld in die liste"), not only when one is live.
-            const int uslot = m - uf8::bindings::kUf1JogFirstUserMode;
-            if (uslot >= 0 && uslot < uf8::bindings::kUf1JogUserModes) {
-                namespace bnd = uf8::bindings;
-                static char nameBuf[bnd::kUf1JogUserModes][bnd::kUf1JogUserNameMax + 1] = {};
-                static std::string nameSeen[bnd::kUf1JogUserModes];
-                static bool nameInit[bnd::kUf1JogUserModes] = {};
-                bnd::Uf1JogUserMode um = bnd::getUf1JogUser(uslot);
-                if (!nameInit[uslot] || nameSeen[uslot] != um.name) {
-                    nameInit[uslot] = true;
-                    nameSeen[uslot] = um.name;
-                    snprintf(nameBuf[uslot], sizeof(nameBuf[uslot]), "%s", um.name.c_str());
-                }
-                char hint[16]; snprintf(hint, sizeof(hint), "User %d", uslot + 1);
-                int nf = 0;
-                ImGui_SetNextItemWidth(ctx, 95.0);
-                if (ImGui_InputTextWithHint(ctx, "##jogusrname", hint, nameBuf[uslot],
-                                            sizeof(nameBuf[uslot]), &nf, nullptr)) {
-                    um.name = nameBuf[uslot];
-                    nameSeen[uslot] = um.name;
-                    bnd::setUf1JogUser(uslot, um);
-                }
-            } else {
-                ImGui_Text(ctx, reasixty_uf1JogModeName(m));
+        int jtFlags = ImGui_TableFlags_RowBg | ImGui_TableFlags_BordersInnerH
+                    | ImGui_TableFlags_SizingFixedFit | ImGui_TableFlags_NoHostExtendX;
+        if (ImGui_BeginTable(ctx, "##jog_modes", 4, &jtFlags, nullptr, nullptr, nullptr)) {
+            const int wFixed = ImGui_TableColumnFlags_WidthFixed;
+            int    cf0 = wFixed, cf1 = wFixed, cf2 = wFixed, cf3 = wFixed;
+            double cw0 = scaleW_(ctx, 44.0),  cw1 = scaleW_(ctx, 56.0),
+                   cw2 = scaleW_(ctx, 130.0), cw3 = scaleW_(ctx, 190.0);
+            ImGui_TableSetupColumn(ctx, "Show",  &cf0, &cw0, nullptr);
+            ImGui_TableSetupColumn(ctx, "Order", &cf1, &cw1, nullptr);
+            ImGui_TableSetupColumn(ctx, "Mode",  &cf2, &cw2, nullptr);
+            ImGui_TableSetupColumn(ctx, "Fader", &cf3, &cw3, nullptr);
+            int headerRow = ImGui_TableRowFlags_Headers;
+            ImGui_TableNextRow(ctx, &headerRow, nullptr);
+            static const char* const kJogCols[4] = { "Show", "Order", "Mode", "Fader" };
+            for (int c = 0; c < 4; ++c) {
+                ImGui_TableSetColumnIndex(ctx, c);
+                ImGui_TableHeader(ctx, kJogCols[c]);
+                if (c == 0) help_(ctx, "Ticked modes are in the picker. The picker walks this order.");
+                if (c == 3) help_(ctx, "What the fader moves in this mode. Item and take volume "
+                                       "move every selected item and keep their differences.");
             }
-            // The fader can go with the mode (Frank 25.09.2026), every mode
-            // since 16.11.2026. Track = what the fader always does.
-            double fx = 190.0;
-            ImGui_SameLine(ctx, &fx, nullptr);
-            const int ft = reasixty_uf1JogFaderTarget(m);
-            ImGui_SetNextItemWidth(ctx, 190.0);
-            if (ImGui_BeginCombo(ctx, "##jf", reasixty_uf1JogFaderTargetName(ft), nullptr)) {
-                for (int t = 0; t < reasixty_uf1JogFaderTargetCount(); ++t) {
-                    bool sel = (t == ft);
-                    if (ImGui_Selectable(ctx, reasixty_uf1JogFaderTargetName(t), &sel,
-                                         nullptr, nullptr, nullptr) && t != ft)
-                        reasixty_setUf1JogFaderTarget(m, t);
+            // An arrow with nowhere to go is the same button, dimmed and dead,
+            // so both arrows sit at the same place in every row.
+            const int colBtn = ImGui_GetStyleColor(ctx, ImGui_Col_Button);
+            const int colDim = ImGui_GetStyleColor(ctx, ImGui_Col_TextDisabled);
+            auto arrow = [&](const char* label, bool live) -> bool {
+                if (live) return ImGui_SmallButton(ctx, label);
+                ImGui_PushStyleColor(ctx, ImGui_Col_Text, colDim);
+                ImGui_PushStyleColor(ctx, ImGui_Col_ButtonHovered, colBtn);
+                ImGui_PushStyleColor(ctx, ImGui_Col_ButtonActive, colBtn);
+                ImGui_SmallButton(ctx, label);
+                int n = 3; ImGui_PopStyleColor(ctx, &n);
+                return false;
+            };
+            for (int pos = 0; pos < jn; ++pos) {
+                const int m = reasixty_uf1JogSeqAt(pos);
+                char rowId[24]; snprintf(rowId, sizeof(rowId), "jogmode_%d", pos);
+                ImGui_PushID(ctx, rowId);
+                ImGui_TableNextRow(ctx, nullptr, nullptr);
+
+                ImGui_TableSetColumnIndex(ctx, 0);
+                bool vis = reasixty_uf1JogModeVisible(m);
+                if (ImGui_Checkbox(ctx, "##vis", &vis)) reasixty_setUf1JogModeVisible(m, vis);
+
+                ImGui_TableSetColumnIndex(ctx, 1);
+                if (arrow("\xE2\x96\xB2##up", pos > 0)) reasixty_uf1JogMoveSeq(pos, -1);
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                if (arrow("\xE2\x96\xBC##dn", pos < jn - 1)) reasixty_uf1JogMoveSeq(pos, +1);
+
+                ImGui_TableSetColumnIndex(ctx, 2);
+                // The user's own modes are named right here, in their row (Frank
+                // 16.11.2026: "namensfeld in die liste"), not only when one is live.
+                const int uslot = m - uf8::bindings::kUf1JogFirstUserMode;
+                if (uslot >= 0 && uslot < uf8::bindings::kUf1JogUserModes) {
+                    namespace bnd = uf8::bindings;
+                    static char nameBuf[bnd::kUf1JogUserModes][bnd::kUf1JogUserNameMax + 1] = {};
+                    static std::string nameSeen[bnd::kUf1JogUserModes];
+                    static bool nameInit[bnd::kUf1JogUserModes] = {};
+                    bnd::Uf1JogUserMode um = bnd::getUf1JogUser(uslot);
+                    if (!nameInit[uslot] || nameSeen[uslot] != um.name) {
+                        nameInit[uslot] = true;
+                        nameSeen[uslot] = um.name;
+                        snprintf(nameBuf[uslot], sizeof(nameBuf[uslot]), "%s", um.name.c_str());
+                    }
+                    char hint[16]; snprintf(hint, sizeof(hint), "User %d", uslot + 1);
+                    int nf = 0;
+                    ImGui_SetNextItemWidth(ctx, -1.0);
+                    if (ImGui_InputTextWithHint(ctx, "##jogusrname", hint, nameBuf[uslot],
+                                                sizeof(nameBuf[uslot]), &nf, nullptr)) {
+                        um.name = nameBuf[uslot];
+                        nameSeen[uslot] = um.name;
+                        bnd::setUf1JogUser(uslot, um);
+                    }
+                } else {
+                    // Text on the same baseline as the name fields of the rows below.
+                    ImGui_AlignTextToFramePadding(ctx);
+                    ImGui_Text(ctx, reasixty_uf1JogModeName(m));
                 }
-                ImGui_EndCombo(ctx);
+
+                // The fader can go with the mode (Frank 25.09.2026), every mode
+                // since 16.11.2026. Track = what the fader always does.
+                ImGui_TableSetColumnIndex(ctx, 3);
+                const int ft = reasixty_uf1JogFaderTarget(m);
+                ImGui_SetNextItemWidth(ctx, -1.0);
+                if (ImGui_BeginCombo(ctx, "##jf", reasixty_uf1JogFaderTargetName(ft), nullptr)) {
+                    for (int t = 0; t < reasixty_uf1JogFaderTargetCount(); ++t) {
+                        bool sel = (t == ft);
+                        if (ImGui_Selectable(ctx, reasixty_uf1JogFaderTargetName(t), &sel,
+                                             nullptr, nullptr, nullptr) && t != ft)
+                            reasixty_setUf1JogFaderTarget(m, t);
+                    }
+                    ImGui_EndCombo(ctx);
+                }
+                ImGui_PopID(ctx);
             }
-            if (pos == 0)
-                help_(ctx, "What the fader moves in this mode. Item and take volume "
-                           "move every selected item and keep their differences.");
-            ImGui_PopID(ctx);
+            ImGui_EndTable(ctx);
         }
         ImGui_Spacing(ctx);
         int    fl = 0;
