@@ -12216,6 +12216,22 @@ static void uf1MoveCursorByGrid_(int dir)
 // exactly the old behaviour, and the right one when the walk is not ours.
 // Main thread only; stale item pointers are their own bug class here.
 static std::vector<MediaItem*> g_uf1ItemNavPicks;
+// ⇨ DOES THIS ITEM PLAY, as far as its lane goes. On a fixed-lane track only the
+// lanes that play count (C_LANEPLAYS > 0), unless every lane plays; elsewhere an
+// item on a hidden lane that is switched off (-1) does not. The UC1 input meter
+// (26.10.2026) and the UF1 item arrows (17.11.2026, Frank: the arrows picked
+// items from another lane than the active one) ask this one question.
+static bool itemLanePlays_(MediaItem* it)
+{
+    if (!it) return false;
+    const int plays = static_cast<int>(GetMediaItemInfo_Value(it, "C_LANEPLAYS"));
+    MediaTrack* tr = GetMediaItem_Track(it);
+    if (tr && static_cast<int>(GetMediaTrackInfo_Value(tr, "I_FREEMODE")) == 2) {
+        if (static_cast<int>(GetMediaTrackInfo_Value(tr, "C_ALLLANESPLAY")) == 1) return true;
+        return plays > 0;
+    }
+    return plays != -1;
+}
 // Track number of an item's track, or -1. Shared by both anchors.
 static int uf1ItemTrk_(MediaItem* it)
 {
@@ -12371,6 +12387,7 @@ static void uf1SelectAdjacentItem_(int dir, bool add)
     for (int i = 0; i < ni; ++i) {
         MediaItem* it = GetTrackMediaItem(tr, i);
         if (!it || it == anchor) continue;
+        if (!itemLanePlays_(it)) continue;   // a silent fixed lane is not where you are
         const double p = GetMediaItemInfo_Value(it, "D_POSITION");
         if (dir > 0 && p > anchorPos + 1e-9) { if (!best || p < bestPos) { best = it; bestPos = p; } }
         if (dir < 0 && p < anchorPos - 1e-9) { if (!best || p > bestPos) { best = it; bestPos = p; } }
@@ -12405,6 +12422,7 @@ static MediaItem* uf1NearestItemOnTrack_(MediaTrack* t, double pos)
     for (int i = 0; i < ni; ++i) {
         MediaItem* it = GetTrackMediaItem(t, i);
         if (!it) continue;
+        if (!itemLanePlays_(it)) continue;   // only the lanes that play (itemLanePlays_)
         const double p = GetMediaItemInfo_Value(it, "D_POSITION");
         const double l = GetMediaItemInfo_Value(it, "D_LENGTH");
         const double d = (pos < p) ? (p - pos) : (pos > p + l) ? (pos - (p + l)) : 0.0;
@@ -47515,7 +47533,6 @@ static void uc1LaneInputPeak_(MediaTrack* tr, double t, int sr, int nSamp,
     std::fill(sum, sum + nSamp * 2, 0.0);
     for (auto& r : g_uc1TakeReaders_) r.used = false;
 
-    const bool fixed = static_cast<int>(GetMediaTrackInfo_Value(tr, "I_FREEMODE")) == 2;
     const double winEnd = t + static_cast<double>(nSamp) / sr;
     const int ni = CountTrackMediaItems(tr);
     for (int i = 0; i < ni; ++i) {
@@ -47523,8 +47540,8 @@ static void uc1LaneInputPeak_(MediaTrack* tr, double t, int sr, int nSamp,
         const double pos = GetMediaItemInfo_Value(it, "D_POSITION");
         const double len = GetMediaItemInfo_Value(it, "D_LENGTH");
         if (pos >= winEnd || pos + len <= t) continue;
-        const int plays = static_cast<int>(GetMediaItemInfo_Value(it, "C_LANEPLAYS"));
-        if (fixed ? plays <= 0 : plays == -1) continue;
+        // Gated by uc1InputNeedsTakeRead_, so "every lane plays" never reaches here.
+        if (!itemLanePlays_(it)) continue;
         if (GetMediaItemInfo_Value(it, "B_MUTE") > 0.5) continue;
         MediaItem_Take* tk = GetActiveTake(it);
         if (!tk || TakeIsMIDI(tk)) continue;
