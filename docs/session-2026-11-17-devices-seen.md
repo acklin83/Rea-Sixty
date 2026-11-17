@@ -23,3 +23,9 @@ Workaround for older builds: Settings > General, "Show settings for devices you 
 ## Open
 - Frank: the two behaviour changes from the jog modes ("Item Vol" zone name, cycle walks only ticked modes), keep or revert.
 - Not released. Dylib 53123e6a installed, needs a REAPER restart.
+
+## Jog modes list as a table `04b4b998`
+Show / Order / Mode / Fader columns with headers. A missing arrow is the same small button, dimmed and inert, so the names line up.
+
+## Item arrows on fixed lanes `7064f17c`
+Frank: in Items jog mode the arrows picked items from another lane than the active one. `uf1SelectAdjacentItem_` and `uf1NearestItemOnTrack_` never checked the lane (unchanged since 15.09.; fixed lanes came 01.10.). They now skip items whose lane does not play, via `itemLanePlays_` (shared with the UC1 input meter). Group mates that REAPER's 40034 pulls in are not filtered.
