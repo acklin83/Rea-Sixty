@@ -41,3 +41,6 @@ Tag auf `f2861074`, CI-Tag-Lauf gruen, GitHub-Release mit 16 Assets, ReaPack 0.9
 
 ## 18.11.: SEL dunkel nach Send-Modus (Forum)
 Ausschalten eines Send-/Receive-Modus mit seiner eigenen Taste stiess den Routing-Abgleich nicht an, SEL blieb dunkel. `routingLeft_()` in beiden Toggle-off-Zweigen. HOME war nie betroffen. Am Gerät nicht geprueft.
+
+## 18.11.: Linux liest die Tastatur-Modifier
+host*Held_ gaben unter Linux immer false (seit Mai „TBD“). Jetzt X-Server-Maske per libX11-dlopen (linux_keys.cpp), ALT treibt den Cmd-Platz wie unter Windows. Handbuch an sechs Stellen nachgezogen. Nur CI, kein Linux-Geraet.
