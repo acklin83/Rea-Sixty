@@ -445,6 +445,9 @@ add_library(reaper_uf8 MODULE
     src/win_http.cpp
     src/WinUsbDriver.cpp
     src/linux_http.cpp
+    # Linux keyboard modifiers from the X server, libX11 by dlopen; compiles
+    # to nothing elsewhere.
+    src/linux_keys.cpp
     src/ExchangeView.cpp
 )
 
@@ -912,6 +915,10 @@ if(NOT WIN32)
     add_executable(test_devices_seen tests/test_devices_seen.cpp)
     target_include_directories(test_devices_seen PRIVATE src)
     add_test(NAME devices_seen COMMAND test_devices_seen)
+
+    add_executable(test_linux_key_mods tests/test_linux_key_mods.cpp)
+    target_include_directories(test_linux_key_mods PRIVATE src)
+    add_test(NAME linux_key_mods COMMAND test_linux_key_mods)
 
     # The UC1's send queue: LED writes for one cell collapse to the newest.
     add_executable(test_uc1_send_queue tests/test_uc1_send_queue.cpp)

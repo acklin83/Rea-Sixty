@@ -41,12 +41,14 @@
 //   macOS  → CGEventSourceFlagsState (ApplicationServices is already
 //            linked, see CMakeLists.txt).
 //   Win    → GetAsyncKeyState(VK_MENU).
-//   Linux  → TBD (X11 XQueryKeymap / GDK gdk_device_modifier_state);
-//            currently returns false so the feature no-ops cleanly.
+//   Linux  → the X server's modifier mask (linux_keys.cpp, libX11 by
+//            dlopen); false without an X server. Since 18.11.2026.
 #if defined(__APPLE__)
 #  include <CoreGraphics/CoreGraphics.h>
 #elif defined(_WIN32)
 #  include <windows.h>
+#elif defined(__linux__)
+#  include "LinuxKeyMods.h"
 #endif
 
 #include <functional>
@@ -44747,6 +44749,8 @@ bool hostAltHeld_()
     return (f & kCGEventFlagMaskAlternate) != 0;
 #elif defined(_WIN32)
     return (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+#elif defined(__linux__)
+    return linuxkeys::held().alt;
 #else
     return false;
 #endif
@@ -44763,6 +44767,8 @@ bool hostShiftHeld_()
     return (f & kCGEventFlagMaskShift) != 0;
 #elif defined(_WIN32)
     return (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+#elif defined(__linux__)
+    return linuxkeys::held().shift;
 #else
     return false;
 #endif
@@ -44785,6 +44791,8 @@ bool hostCtrlHeld_()
     return (f & kCGEventFlagMaskControl) != 0;
 #elif defined(_WIN32)
     return (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+#elif defined(__linux__)
+    return linuxkeys::held().ctrl;
 #else
     return false;
 #endif
@@ -48425,8 +48433,9 @@ void onTimerBody_()
     const bool typingInSettings = reasixty_settingsHasKeyboardFocus();
     uf8::bindings::setKeyboardShiftHeld(
         g_keyboardShiftModifier.load() && hostShiftHeld_() && !typingInSettings);
-#ifdef _WIN32
-    // Windows has no keyboard Cmd key (hostCmdHeld_ is always false), so the
+#if defined(_WIN32) || defined(__linux__)
+    // Windows and Linux have no keyboard Cmd key (hostCmdHeld_ is always false;
+    // Super belongs to the desktop), so the
     // "Cmd" modifier slot would be unreachable from the keyboard — drive it from
     // ALT instead (the natural second modifier; matches the "Alt/Cmd" mental
     // model). AND guard AltGr: right-Alt reports as Ctrl+Alt, which otherwise
@@ -48436,7 +48445,10 @@ void onTimerBody_()
     {
         const bool altHeld  = hostAltHeld_();
         bool       ctrlHeld = hostCtrlHeld_();
+#ifdef _WIN32
         if ((GetAsyncKeyState(VK_RMENU) & 0x8000) != 0) ctrlHeld = false; // AltGr → Alt
+#endif
+        // (X11 puts AltGr on Mod5, never on Alt or Ctrl: nothing to drop.)
         uf8::bindings::setKeyboardCmdHeld(
             g_keyboardCmdModifier.load()  && altHeld && !typingInSettings);
         uf8::bindings::setKeyboardCtrlHeld(

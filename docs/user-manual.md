@@ -751,7 +751,7 @@ There is no Cmd or Ctrl set, deliberately. The surface has exactly one modifier
 key, so those two could only come from the computer keyboard, where they already
 drive the FX-Learn modifier layers.
 
-In the bank matrix, drag a column header onto another to swap two banks, and a cell onto another cell to swap two keys, also across banks. Onto an empty place that is a move. Hold Cmd (Alt on Windows) as you let go to copy instead. Dragged on Plain, a bank or key goes with its Shift set; dragged on Shift, only the Shift set. A bank takes its name and dynamic kind along. The cells of a dynamic bank do not drag, its header does.
+In the bank matrix, drag a column header onto another to swap two banks, and a cell onto another cell to swap two keys, also across banks. Onto an empty place that is a move. Hold Cmd (Alt on Windows and Linux) as you let go to copy instead. Dragged on Plain, a bank or key goes with its Shift set; dragged on Shift, only the Shift set. A bank takes its name and dynamic kind along. The cells of a dynamic bank do not drag, its header does.
 
 A bank can carry a **name** of its own, typed by double-clicking its column header in the bank matrix, one per set. It
 is what the UF1's time display announces when you switch to that bank, unless you
@@ -1459,7 +1459,7 @@ Surface-side handling of the REAPER Master bus. See **Master track** (own chapte
 |---|---|
 | Alt/Option + fader drag → snap back to original on release | Hold Alt/Option while moving a fader; release while still holding Alt → fader snaps back to its touch-on value. Mirrors REAPER's mouse Alt-drag. Off by default. |
 | Keyboard Shift acts as Shift modifier | When on (the default), holding **Shift** on the host keyboard counts as the Shift modifier for any binding's Plain/Shift/Cmd/Ctrl modifier slot — in addition to the hardware **Modifier: …** bindings. |
-| Keyboard Cmd (⌘) acts as Cmd modifier | Same, for Cmd on macOS; on Windows the Alt key drives this slot. On by default. |
+| Keyboard Cmd (⌘) acts as Cmd modifier | Same, for Cmd on macOS; on Windows and Linux the Alt key drives this slot. On by default. |
 | Keyboard Ctrl acts as Ctrl modifier | Same, for Ctrl (Control on macOS). On by default. |
 
 The three FX-Learn modifier-layer switches used to sit here. They now live in *FX Learn → Modifier layers*.
@@ -1529,7 +1529,7 @@ Each set is a **full bank**, not just a second list of actions: its own actions,
 
 **Copy, cut and paste a whole bank.** The cell's right-click menu moves a bank the way the preset does, without naming it: copy takes the eight slots, the bank's name and its dynamic kind, cut takes them and empties the cell, paste writes them into the cell you clicked. Copying from Plain takes the Shift set along when that set holds something, exactly as saving a preset does, and cut then clears both. Pasting reproduces a dynamic bank as a dynamic bank, which is where a copy differs from a preset recall. The clipboard lives for the session, not in the config.
 
-**Drag a bank onto another cell.** The two banks swap places, across sets and columns, and onto an empty cell that is a move. Hold Cmd (Alt on Windows) as you let go to copy instead: the target is overwritten and the original stays. Dragged on Plain, the whole bank goes, with its Shift set; dragged on Shift, only the Shift set. The bank's eight keys, its name, its dynamic kind and the colour of its selector key go with it, and the cell you dropped on is engaged. A copy from Plain follows the Copy rule: it takes Shift along when Shift has something in it, and otherwise leaves the target's Shift set as it is. The pages the SSL plug-in fills in Sets 8 and 9 cannot be dragged or dropped on.
+**Drag a bank onto another cell.** The two banks swap places, across sets and columns, and onto an empty cell that is a move. Hold Cmd (Alt on Windows and Linux) as you let go to copy instead: the target is overwritten and the original stays. Dragged on Plain, the whole bank goes, with its Shift set; dragged on Shift, only the Shift set. The bank's eight keys, its name, its dynamic kind and the colour of its selector key go with it, and the cell you dropped on is engaged. A copy from Plain follows the Copy rule: it takes Shift along when Shift has something in it, and otherwise leaves the target's Shift set as it is. The pages the SSL plug-in fills in Sets 8 and 9 cannot be dragged or dropped on.
 
 **Drag a whole set.** Drag a set's number onto another set's number, with the same swap and the same Cmd copy. All six banks go, Plain and Shift, with their colours and the set's name. Sets 8 and 9 stay where they are. *Soft-Key Set: engage*, the startup bank and the Quick keys stay with the place, so they now lead to whatever is there.
 
@@ -1931,7 +1931,7 @@ SSL strip is the plug-in's own, not our reconstruction of it.
 A user-mapped UC1 control can carry **four independent layers** — *Normal* plus three held-modifier overlays, *Option*, *Control* and *Control+Option* — so the same physical pot or button drives a different parameter (with its own invert, knob-travel, push-cycle, and Display label) depending on which modifier you hold.
 
 - **Editing:** the editor's *Layer:* radio row (*Normal* / *Option* / *Control* / *Ctrl+Opt*), or tapping that modifier on the keyboard, selects which layer you're editing; every per-control edit (bind, invert, Display label, knob travel, push-cycle) applies to the selected layer. Controls with no overlay on the active layer show a dim "ghost" ring — at runtime they inherit their Normal mapping.
-- **Enabling at runtime:** three switches under *Settings → FX Learn → Modifier layers* — *"Hold Option for the FX-Learn Option layer"*, *"Hold Control for the FX-Learn Control layer"* and *"Hold Control+Option for the combined FX-Learn layer"*. All three are on by default. Holding **Option/Alt** selects the Option layer, **Control** the Control layer, and **both together** the Control+Option layer; with the combined switch off, both-held falls back to Normal, and holding neither is always Normal. The held modifier takes effect live — on the bound control, the UC1 LCD readout, and the Learn-HUD's layer badge. *(Windows: **Alt** is the Option layer, **Control** the Control layer, either side; **left Alt and left Control** together are the combined one. **AltGr** also gives Option: Windows reports it as Ctrl+Alt and the synthetic Ctrl is dropped. Any pairing that is not the two left keys gives Option alone.)*
+- **Enabling at runtime:** three switches under *Settings → FX Learn → Modifier layers* — *"Hold Option for the FX-Learn Option layer"*, *"Hold Control for the FX-Learn Control layer"* and *"Hold Control+Option for the combined FX-Learn layer"*. All three are on by default. Holding **Option/Alt** selects the Option layer, **Control** the Control layer, and **both together** the Control+Option layer; with the combined switch off, both-held falls back to Normal, and holding neither is always Normal. The held modifier takes effect live — on the bound control, the UC1 LCD readout, and the Learn-HUD's layer badge. *(Windows: **Alt** is the Option layer, **Control** the Control layer, either side; **left Alt and left Control** together are the combined one. **AltGr** also gives Option: Windows reports it as Ctrl+Alt and the synthetic Ctrl is dropped. Any pairing that is not the two left keys gives Option alone. Linux: **Alt** is the Option layer, **Ctrl** the Control layer, both together the combined one.)*
 - **Fallback:** an overlay left unmapped passes through to the Normal mapping for that control, so you only override the controls you want different under a modifier.
 - **Scope:** UC1 only. The Display label (custom name) is **per layer** — each layer can show its own name on the UC1 readout / Learn-HUD.
 
@@ -2576,10 +2576,10 @@ Per-slot actions also exist for slots 1..8: **Param Group N → Add Selected Tra
 
 ## Modifier keys
 
-When held, these shift every other binding to its modifier slot. The UF8 has one modifier key, **FINE**, and it carries Shift out of the box; the UF1's **SHIFT** key does the same. There is no hardware key for Cmd or Ctrl and none is bound by default — put them on any button you like, or use the computer keyboard on macOS or Windows (*Settings → Behaviour → Keyboard*, on by default).
+When held, these shift every other binding to its modifier slot. The UF8 has one modifier key, **FINE**, and it carries Shift out of the box; the UF1's **SHIFT** key does the same. There is no hardware key for Cmd or Ctrl and none is bound by default — put them on any button you like, or use the computer keyboard (*Settings → Behaviour → Keyboard*, on by default).
 
 - **Modifier: Shift / Fine (double-click latches)** — Shift modifier. Double-click latches (press once more to unlatch). The SSL `FINE` key uses this builtin.
-- **Modifier: Cmd** — Cmd modifier. From the computer keyboard this is **macOS only**: the Windows key is OS-reserved and not claimed, so on Windows and Linux the Cmd slot is reachable only from a surface button you bind to this action. On Linux the same is true of Shift and Ctrl.
+- **Modifier: Cmd** — Cmd modifier. From the computer keyboard it is Cmd on macOS and **Alt** on Windows and Linux, where the Windows or Super key belongs to the system. On Linux under Wayland the keyboard counts while a REAPER window has the focus.
 - **Modifier: Ctrl** — Ctrl modifier.
 
 ## Surface-state toggles
@@ -2787,7 +2787,7 @@ Cycling on the UC1 shows the same **previous / current / next** carousel the FX 
 
 The **Solo / Cut** buttons on the UF8 strips, the UC1 and the UF1 normally toggle the track's solo or mute. Hold a modifier on your **computer keyboard** while pressing the button to invoke REAPER's other solo / mute modes instead — the same modes you get from right-clicking a track's solo or mute button in REAPER.
 
-The modifier follows REAPER's own convention: on **macOS** the Command key (⌘) is the "Ctrl" role (what REAPER's solo / mute menus show); on **Windows** it is Ctrl. Option/Alt and Shift are the same on both. Windows **AltGr** counts as Alt. On Linux Rea-Sixty cannot read the keyboard's modifiers, so the buttons always do the normal solo and mute there.
+The modifier follows REAPER's own convention: on **macOS** the Command key (⌘) is the "Ctrl" role (what REAPER's solo / mute menus show); on **Windows** and **Linux** it is Ctrl. Option/Alt and Shift are the same everywhere. Windows **AltGr** counts as Alt. On Linux under Wayland the keyboard counts while a REAPER window has the focus.
 
 | Hold while pressing Solo | Action |
 |---|---|
