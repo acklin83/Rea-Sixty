@@ -7629,6 +7629,20 @@ inline bool anyRoutingActive_()
         || g_recvFaderAllIdx.load() >= 0 || g_recvFaderThisTrack.load();
 }
 
+// A routing mode switched off by pressing its own key again. ⛔ THE SAME
+// RESYNC AS clearVpotRouting_ / clearFaderRouting_: the SEL lamps go dark in a
+// Send/Receive fader mode (uf8StripSelTrack_), and only the routing-edge resync
+// in pushZonesForVisibleSlots lights them again. The toggle-off branch of the
+// send/receive builtins only reset the mode, so leaving with the same key
+// left SEL dark until another track was selected (forum, 18.11.2026; HOME
+// went through clear*Routing_ and was fine). The send window goes back to
+// page 1 once no routing mode is left.
+void routingLeft_()
+{
+    if (!anyRoutingActive_()) g_sendBankOffset.store(0);
+    g_routingDirty.store(true);
+}
+
 // Physical strip (0 or 7) the Master is currently pinned to, or -1 when no
 // pin is live. Normal-mode only — yields to Selection Sets, Auto selection
 // mode, routing modes and UF8 Plug-in / FX-Learn mode, all of which
@@ -60410,6 +60424,7 @@ void registerBindingHandlers()
                     auto  clr = (param == 1) ? clearVpotOthers : clearFaderOthers;
                     if (out->load() == n) {
                         out->store(-1);                     // toggle off
+                        routingLeft_();
                     } else {
                         clr();
                         out->store(n);
@@ -60458,6 +60473,7 @@ void registerBindingHandlers()
                 auto  clr = (param == 1) ? clearVpotOthers : clearFaderOthers;
                 if (out->load()) {
                     out->store(false);
+                    routingLeft_();
                 } else {
                     clr();
                     out->store(true);
