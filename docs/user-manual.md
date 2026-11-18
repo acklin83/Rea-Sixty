@@ -2785,9 +2785,9 @@ Cycling on the UC1 shows the same **previous / current / next** carousel the FX 
 
 # Solo / Mute modifier modes
 
-The UF8 strip **Solo / Cut** buttons and the UC1 **Solo / Cut** buttons normally toggle the track's solo or mute. Hold a modifier on your **computer keyboard** while pressing the button to invoke REAPER's other solo / mute modes instead — the same modes you get from right-clicking a track's solo or mute button in REAPER.
+The **Solo / Cut** buttons on the UF8 strips, the UC1 and the UF1 normally toggle the track's solo or mute. Hold a modifier on your **computer keyboard** while pressing the button to invoke REAPER's other solo / mute modes instead — the same modes you get from right-clicking a track's solo or mute button in REAPER.
 
-The modifier follows REAPER's own convention: on **macOS** the Command key (⌘) is the "Ctrl" role (what REAPER's solo / mute menus show); on **Windows** it is Ctrl. Option/Alt and Shift are the same on both. Windows **AltGr** counts as Alt.
+The modifier follows REAPER's own convention: on **macOS** the Command key (⌘) is the "Ctrl" role (what REAPER's solo / mute menus show); on **Windows** it is Ctrl. Option/Alt and Shift are the same on both. Windows **AltGr** counts as Alt. On Linux Rea-Sixty cannot read the keyboard's modifiers, so the buttons always do the normal solo and mute there.
 
 | Hold while pressing Solo | Action |
 |---|---|
