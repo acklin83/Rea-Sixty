@@ -38,3 +38,6 @@ Notes `dist/RELEASE-NOTES-v0.9.3.md`, Handbuch-Version, Codename-Zeile, README-Z
 
 ## v0.9.3 „Reservoir Jogs“ RAUS
 Tag auf `f2861074`, CI-Tag-Lauf gruen, GitHub-Release mit 16 Assets, ReaPack 0.9.3 (12 Adressen 200), reasixty.com deployt (Handbuch v0.9.3, 30 Bilder, 9 Routen 200).
+
+## 18.11.: SEL dunkel nach Send-Modus (Forum)
+Ausschalten eines Send-/Receive-Modus mit seiner eigenen Taste stiess den Routing-Abgleich nicht an, SEL blieb dunkel. `routingLeft_()` in beiden Toggle-off-Zweigen. HOME war nie betroffen. Am Gerät nicht geprueft.
