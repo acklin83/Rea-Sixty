@@ -915,7 +915,8 @@ the mode banner. Switch the wheel to it and the rest of its settings show below 
   direction, the way REAPER takes a MIDI controller set to relative. That suits REAPER's
   actions marked *(MIDI CC relative/mousewheel)*, such as *View: Zoom horizontally* or
   *View: Scroll vertically*, and Rea-Sixty's own stepping actions such as *Encoder: cycle
-  FX*.
+  FX*. Main actions only: REAPER gives a MIDI Editor action no direction, so for one of
+  those use *Left / right*.
 - **Detents per step**: how many detents make one step. At 1 every detent fires.
 
 *Turn left...* and *Turn right...* (or *Action...*) open the binding in the editor, with a
@@ -1707,7 +1708,7 @@ For a regular button, the editor exposes:
 - **Repeat while held** — in the LONG PRESS column, per row: the long press keeps firing until you let go. The first one lands at the half second, the rest at the interval you set, 20 ms to 1000 ms, 100 ms by default. Useful on nudges, zoom steps, marker steps and anything else you would otherwise tap ten times. The tick is greyed out on an action that toggles, because repeating one just flips it back and forth, and on an empty row.
 - **LED** — an Active and an Inactive row, each a colour plus Off / Dim / Bright, and *Show LED even when no action is assigned*.
 - For **MIDI Command** bindings: device, channel, message (Note On / Note Off / Control Change / Program Change), note or CC number, and velocity or value.
-- For **REAPER Action** bindings: **Browse Action...** opens REAPER's own Action List, and **Load ReaScript...** picks a script.
+- For **REAPER Action** bindings: **Section** picks the part of the Action List the action comes from: *Main*, *MIDI Editor*, *MIDI Event List* or *Crossfade Editor*. **Browse Action...** then opens REAPER's own Action List on that section, and **Load ReaScript...** picks a script and adds it to that section.
 - For the five **UF1** keys the screen prints a name for (the `SOFT` key and the four display soft-keys): a **Label**. Leave it empty and the label follows whatever action is bound; type your own and it stays, whatever you rebind the key to afterwards. Clearing the field hands the name back to the action. This is why the UF1's single SOFT key stops reading `Focus Chan` once you give it a different job. Every other UF1 key has no field, because the surface has nowhere to print it.
 
 ### Right-click context menu
@@ -3477,6 +3478,14 @@ Every bound button can override its LED colour and brightness, independent of th
 ## REAPER Action picker
 
 Pick any action from REAPER's Action List by name or command ID. Supports filtering and ReaScript loading (Load ReaScript button drops a `.lua` file into the catalog).
+
+Set **Section** first. Each section of the Action List numbers its actions on its own, so a MIDI Editor command ID typed with *Main* selected runs whatever Main action has that number. Changing the section clears the action.
+
+- **Main**: REAPER's main actions.
+- **MIDI Editor** and **MIDI Event List**: run in the MIDI editor you used last. With no MIDI editor open, or with it in the other view, the key does nothing.
+- **Crossfade Editor**: runs in the Crossfade Editor.
+
+REAPER has no way for an extension to run actions from the MIDI Inline Editor or the Media Explorer sections, so those are not offered.
 
 Named commands (the ones starting with an underscore) are resolved by name rather than by number, so ReaScripts stay bound when REAPER re-numbers its action list.
 

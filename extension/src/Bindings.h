@@ -511,10 +511,33 @@ enum class MidiMsgType : uint8_t {
 
 // One step of an action chain. `wait_ms` is the gap AFTER this step
 // before the next step fires (ignored on the chain's last step).
+// ⇨ REAPER'S ACTION LIST HAS SECTIONS, and a number means something else in
+// each: 40001 in the MIDI Editor is not 40001 in Main. Until 20.11.2026 every
+// REAPER step was a Main action, so a MIDI Editor action could not be picked and
+// its Command ID, typed by hand, fired the Main action with the same number
+// (forum, user jog modes). These are the sections REAPER lets an extension
+// fire into: MIDIEditor_LastFocused_OnCommand (editor and event list, the same
+// two REAPER's own OSC surface offers as MIDIACTION / MIDILISTACTION) and
+// CrossfadeEditor_OnCommand. The ids are REAPER's (uniqueSectionId,
+// reaper_plugin.h). The inline MIDI editor and the Media Explorer have no
+// such call and are not offered.
+constexpr int kActionSectionMain          = 0;
+constexpr int kActionSectionMidiEditor    = 32060;
+constexpr int kActionSectionMidiEventList = 32061;
+constexpr int kActionSectionCrossfade     = 32065;
+inline bool actionSectionKnown(int s)
+{
+    return s == kActionSectionMain || s == kActionSectionMidiEditor
+        || s == kActionSectionMidiEventList || s == kActionSectionCrossfade;
+}
+
 struct ActionStep {
     ActionType  type     = ActionType::Noop;
     std::string action;        // builtin name / REAPER action id / keyboard chord
     int         param    = 0;
+    // REAPER steps only: the action list section `action` belongs to, one of
+    // kActionSection*. 0 = Main, which is every step written before it existed.
+    int         section  = kActionSectionMain;
     // Per-step scribble label. Step 0 doubles as the slot's label (the
     // legacy single-action case): shown on the UF8 LCD when this slot is
     // the one a press will fire. Empty = fall back to the binding's
@@ -1127,7 +1150,7 @@ void setPressMode(Binding& bd, PressMode mode);
 // on/off state, or the key is on Hold already (so a stored choice stays
 // visible and can be undone). `reaperIsToggle` may be empty.
 bool offersPressChoice(const Binding& bd,
-                       const std::function<bool(const std::string&)>& reaperIsToggle);
+                       const std::function<bool(const std::string& action, int section)>& reaperIsToggle);
 
 // ⇨ mod_shift / mod_cmd / mod_ctrl FOR ANY HOST (moved out of main.cpp
 // 27.09.2026). ORC never registered them, so the UF1's SHIFT, bound to

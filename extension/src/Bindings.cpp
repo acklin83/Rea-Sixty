@@ -1935,6 +1935,9 @@ void serializeStepFields_(const ActionStep& s, std::ostringstream& os)
     os << "\"type\": ";   appendEscaped(os, actionTypeName(s.type));
     os << ", \"action\": "; appendEscaped(os, s.action);
     os << ", \"param\": " << s.param;
+    // Only when not Main, so every file written before sections existed reads
+    // and writes back byte for byte.
+    if (s.section != kActionSectionMain) os << ", \"section\": " << s.section;
     if (!s.label.empty()) {
         os << ", \"label\": ";
         appendEscaped(os, s.label);
@@ -2667,6 +2670,13 @@ bool parseStepFields_(wdl_json_element* obj, ActionStep& out)
         if (auto* s = v->get_string_value()) out.action = s;
     if (auto* v = obj->get_item_by_name("param"))
         if (auto* s = v->get_string_value(true)) out.param = std::atoi(s);
+    // An unknown section would send the number to a section that cannot run
+    // it; Main is what such a step was before.
+    if (auto* v = obj->get_item_by_name("section"))
+        if (auto* s = v->get_string_value(true)) {
+            const int sec = std::atoi(s);
+            out.section = actionSectionKnown(sec) ? sec : kActionSectionMain;
+        }
     if (auto* v = obj->get_item_by_name("label"))
         if (auto* s = v->get_string_value()) out.label = s;
     if (auto* v = obj->get_item_by_name("text"))
@@ -3642,7 +3652,7 @@ void setPressMode(Binding& bd, PressMode mode)
 }
 
 bool offersPressChoice(const Binding& bd,
-                       const std::function<bool(const std::string&)>& reaperIsToggle)
+                       const std::function<bool(const std::string& action, int section)>& reaperIsToggle)
 {
     bool any = false;
     for (const ActionSlot& s : bd.shortPress) {
@@ -3656,7 +3666,7 @@ bool offersPressChoice(const Binding& bd,
                     || builtinKind(st.action) == BuiltinKind::Switch))
                 return true;
             if (st.type == ActionType::Reaper && reaperIsToggle
-                && reaperIsToggle(st.action))
+                && reaperIsToggle(st.action, st.section))
                 return true;
         }
     }
@@ -5650,6 +5660,12 @@ void runStep_(const ActionStep& a, bool firing, bool pressed)
             // collapsed Momentary toggles to a no-op (ON+OFF on a
             // single press) — Frank 2026-05-08, removed.
             if (!firing && !a.fireOnInactive) break;
+            // Another section is the host's to run; the sentinel below is
+            // Main_OnCommand, where this number means a different action.
+            if (a.section != kActionSectionMain) {
+                if (host().runSectionAction) host().runSectionAction(a.section, actionId);
+                break;
+            }
             auto it = g_builtins.find("__reaper_action__");
             if (it != g_builtins.end() && it->second.run) {
                 it->second.run(true, pressed, actionId);
@@ -8574,7 +8590,7 @@ static bool actionSlotActive(const ActionSlot& s)
             int aid = std::atoi(s.action.c_str());
             if (aid <= 0 && host().namedCommand) aid = host().namedCommand(s.action.c_str());
             if (aid > 0) {
-                const int st = host().toggleState(aid);
+                const int st = host().toggleState(s.section, aid);
                 if (st >= 0) return st == 1;
             }
             return false;

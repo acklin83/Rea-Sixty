@@ -115,9 +115,12 @@ void reasixty_actionPickerStartDouble(int layer, uf8::bindings::ButtonId id,
 bool reasixty_actionPickerActiveForDouble(int layer, uf8::bindings::ButtonId id,
                                           int modIdx = 0, int stepIdx = 0);
 void reasixty_actionPickerCancel();
-std::string reasixty_resolveActionName(const std::string& action);
-bool        reasixty_actionIsToggle(const std::string& action);
-std::string reasixty_loadReaScript();
+// `section` is the action list section (uf8::bindings::kActionSection*).
+std::string reasixty_resolveActionName(const std::string& action, int section = 0);
+bool        reasixty_actionIsToggle(const std::string& action, int section = 0);
+// The section the next action picker session opens in and stores.
+void        reasixty_actionPickerSetSection(int section);
+std::string reasixty_loadReaScript(int section = 0);
 int  reasixty_brightnessLevel();
 int  reasixty_scribbleBrightnessLevel();
 void reasixty_setBrightnessLevel(int level);
@@ -1610,7 +1613,7 @@ std::string buildBindingTooltip_(int layer, ButtonId id, const char* label)
         }
     }
     // The key's Press / Toggle, where it offers one (pressModeCombo_).
-    if (offersPressChoice(bd, [](const std::string& a) { return reasixty_actionIsToggle(a); })) {
+    if (offersPressChoice(bd, [](const std::string& a, int sec) { return reasixty_actionIsToggle(a, sec); })) {
         out += "\n  [";
         out += pressModeOf(bd) == PressMode::Press ? "Press" : "Toggle";
         out += "]";
@@ -3333,6 +3336,9 @@ struct ActionFieldsRef {
     int*                        midiData1;
     int*                        midiData2;
     bool*                       fireOnInactive = nullptr;  // optional — REAPER actions only
+    // REAPER actions only: the action list section. Optional; without it the
+    // editor offers Main alone.
+    int*                        section        = nullptr;
     // Step-aware builtin fields (fx_param_inc / fx_param_dec). Optional
     // — older call sites that don't touch stepped builtins leave these
     // null; the picker hides the step/wrap widgets in that case.
@@ -3570,7 +3576,7 @@ static std::string autoLabelForAction_(const uf8::bindings::ActionSlot& sp)
             return d;
         }
         case ActionType::Reaper: {
-            std::string n = reasixty_resolveActionName(sp.action);
+            std::string n = reasixty_resolveActionName(sp.action, sp.section);
             // Both sentinels are worse than saying nothing on a hardware label.
             if (n == "(unresolved)" || n == "(no name)") return {};
             return n;
@@ -3588,7 +3594,7 @@ static std::string autoLabelForAction_(const uf8::bindings::ActionSlot& sp)
 static std::string actionIdentity_(const uf8::bindings::ActionSlot& sp)
 {
     return std::to_string(static_cast<int>(sp.type)) + "\x1f" + sp.action
-         + "\x1f" + std::to_string(sp.param);
+         + "\x1f" + std::to_string(sp.param) + "\x1f" + std::to_string(sp.section);
 }
 
 // Apply the precedence in one place: a label the user typed is untouchable;
@@ -3680,7 +3686,7 @@ static bool pressModeCombo_(ImGui_Context* ctx, const char* id,
                             uf8::bindings::Binding& bd)
 {
     using namespace uf8::bindings;
-    if (!offersPressChoice(bd, [](const std::string& a) { return reasixty_actionIsToggle(a); }))
+    if (!offersPressChoice(bd, [](const std::string& a, int sec) { return reasixty_actionIsToggle(a, sec); }))
         return false;
     const int cur = static_cast<int>(pressModeOf(bd));
     bool changed = false;
@@ -3767,6 +3773,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             if (*f.type != t) {
                 f.action->clear();
                 *f.param = 0;
+                if (f.section) *f.section = kActionSectionMain;
             }
             *f.type = t;
             dirty = true;
@@ -3811,6 +3818,36 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
     sectionRadio("rd_reaper", "REAPER Action", ActionType::Reaper);
     if (*f.type == ActionType::Reaper) {
         ImGui_Indent(ctx, /*indent_w*/ nullptr);
+        // ⇨ THE ACTION LIST SECTION FIRST, because the number below means a
+        // different action in each (20.11.2026). Changing it drops the action:
+        // kept, it would silently become whatever that number is over there.
+        const int curSection = f.section ? *f.section : kActionSectionMain;
+        if (f.section) {
+            struct SectionItem { int id; const char* name; };
+            static const SectionItem kSections[] = {
+                { kActionSectionMain,          "Main" },
+                { kActionSectionMidiEditor,    "MIDI Editor" },
+                { kActionSectionMidiEventList, "MIDI Event List" },
+                { kActionSectionCrossfade,     "Crossfade Editor" },
+            };
+            const char* preview = kSections[0].name;
+            for (const auto& it : kSections) if (it.id == curSection) preview = it.name;
+            snprintf(idbuf, sizeof(idbuf), "Section##%s_actsec", prefix);
+            ImGui_PushItemWidth(ctx, 260);
+            if (ImGui_BeginCombo(ctx, idbuf, preview, /*flags*/ nullptr)) {
+                for (const auto& it : kSections) {
+                    bool sel = (it.id == curSection);
+                    if (ImGui_Selectable(ctx, it.name, &sel, nullptr, nullptr, nullptr)
+                        && it.id != curSection) {
+                        *f.section = it.id;
+                        f.action->clear();
+                        dirty = true;
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+            ImGui_PopItemWidth(ctx);
+        }
         char buf[128] = {0};
         std::strncpy(buf, f.action->c_str(), sizeof(buf) - 1);
         snprintf(idbuf, sizeof(idbuf), "Action ID##%s_actid", prefix);
@@ -3849,6 +3886,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                       prefix);
         if (ImGui_Button(ctx, idbuf,
                          /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            if (!pickerOpen) reasixty_actionPickerSetSection(curSection);
             if (pickerOpen) {
                 reasixty_actionPickerCancel();
             } else if (isUserQuick) {
@@ -3869,7 +3907,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         snprintf(idbuf, sizeof(idbuf), "Load ReaScript...##%s_load",
                       prefix);
         if (ImGui_Button(ctx, idbuf, nullptr, nullptr)) {
-            std::string picked = reasixty_loadReaScript();
+            std::string picked = reasixty_loadReaScript(curSection);
             if (!picked.empty()) {
                 *f.action = picked;
                 dirty = true;
@@ -3879,7 +3917,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         // Resolved-name line — dim, just for confirmation. Empty when
         // the field is blank; "(unresolved)" if the stored named cmd no
         // longer exists in this REAPER instance.
-        std::string nameStr = reasixty_resolveActionName(*f.action);
+        std::string nameStr = reasixty_resolveActionName(*f.action, curSection);
         if (!nameStr.empty()) {
             char line[256];
             snprintf(line, sizeof(line), "  %s", nameStr.c_str());
@@ -3894,7 +3932,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
         // is informational only — the user binds to Hold for "active
         // while held" semantics.
         if (f.fireOnInactive && !f.action->empty()) {
-            const bool isToggle = reasixty_actionIsToggle(*f.action);
+            const bool isToggle = reasixty_actionIsToggle(*f.action, curSection);
             if (isToggle) {
                 ImGui_TextDisabled(ctx,
                     "  Toggle action. Behavior Press keeps it on while held.");
@@ -4600,7 +4638,7 @@ bool drawStepPicker_(ImGui_Context* ctx, const char* prefix,
         &st.type, &st.action, &st.param, withLabel ? &st.label : nullptr,
         &st.midiDevice, &st.midiChannel, &st.midiMsgType,
         &st.midiData1, &st.midiData2,
-        &st.fireOnInactive,
+        &st.fireOnInactive, &st.section,
         &st.stepValue, &st.wrap, &st.textParam,
     };
     return drawActionPicker(ctx, prefix, ref, layer, id, isLongPress,
@@ -4814,10 +4852,8 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
         // Zustand: bei einem Builtin sagt es der Deskriptor, bei einer
         // REAPER-Aktion ihr eigener Toggle-Zustand (-1 = kein Umschalter).
         bool stateful = (s.type == ActionType::Builtin && builtinHasState(s.action));
-        if (!stateful && s.type == ActionType::Reaper && !s.action.empty()) {
-            const int cmd = NamedCommandLookup(s.action.c_str());
-            if (cmd != 0) stateful = GetToggleCommandState2(nullptr, cmd) >= 0;
-        }
+        if (!stateful && s.type == ActionType::Reaper && !s.action.empty())
+            stateful = reasixty_actionIsToggle(s.action, s.section);
         const bool empty = s.type == ActionType::Noop || s.action.empty();
         ImGui_Spacing(ctx);
         if (empty || stateful) {
@@ -5219,9 +5255,25 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                 um.relative = false; bnd::setUf1JogUser(slot, um);
             }
             ImGui_SameLine(ctx, nullptr, nullptr);
-            if (ImGui_RadioButton(ctx, "One action with direction##jogusrkind", um.relative)) {
+            // ⛔ Main only. REAPER hands a value only to a Main action
+            // (KBD_OnMainActionEx); a MIDI Editor action runs, but without one,
+            // so the dispatch fires nothing for it in this kind. The binding
+            // with direction is the Turn right one.
+            const bnd::ActionSlot& relSl = bnd::getBinding(layer, bnd::uf1JogUserTurnId(slot, true))
+                                             .shortPress[static_cast<int>(bnd::Modifier::Plain)];
+            const bool relOutsideMain = relSl.type == bnd::ActionType::Reaper
+                                     && relSl.section != bnd::kActionSectionMain;
+            // Locked as plain grey text: the vendored ReaImGui has no
+            // BeginDisabled (vendor/reaimgui/reaper_imgui_functions.h).
+            if (relOutsideMain && !um.relative) {
+                ImGui_TextDisabled(ctx, "One action with direction");
+            } else if (ImGui_RadioButton(ctx, "One action with direction##jogusrkind", um.relative)) {
                 um.relative = true; bnd::setUf1JogUser(slot, um);
             }
+            if (relOutsideMain)
+                ImGui_TextDisabled(ctx, um.relative
+                    ? "This action is not a Main action and does nothing here. Use Left / right."
+                    : "One action with direction takes Main actions only.");
             help_(ctx, "Left / right: each detent fires the left or the right action.\n"
                        "One action with direction: the action gets the detents with their "
                        "direction, for REAPER actions marked MIDI CC relative (scroll, zoom, "
@@ -5241,7 +5293,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                 ImGui_SameLine(ctx, nullptr, nullptr);
                 std::string what;
                 if (pl.action.empty())                        what = "(no action)";
-                else if (pl.type == bnd::ActionType::Reaper)  what = reasixty_resolveActionName(pl.action);
+                else if (pl.type == bnd::ActionType::Reaper)  what = reasixty_resolveActionName(pl.action, pl.section);
                 else if (pl.type == bnd::ActionType::Builtin) what = bnd::builtinDisplayName(pl.action);
                 else                                          what = pl.action;
                 ImGui_TextDisabled(ctx, what.c_str());

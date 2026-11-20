@@ -1,6 +1,6 @@
 #pragma once
 //
-// BindingsHost — the four things the bindings engine cannot answer by itself.
+// BindingsHost — the things the bindings engine cannot answer by itself.
 //
 // Bindings.cpp is 8904 lines and asks REAPER exactly five questions. Everything
 // else about layers, modifiers, long press, step chains, dynamic banks and the
@@ -51,7 +51,13 @@ struct Host {
     // A REAPER action's toggle state: 1 on, 0 off, -1 not a toggle or unknown.
     // Added 2026-09-25 so the soft-key lamps can be resolved inside the engine
     // for both hosts; ORC leaves it unset, and an action it cannot run is off.
-    std::function<int(int commandId)> toggleState;
+    // `section` is the action list section (kActionSection* in Bindings.h).
+    std::function<int(int section, int commandId)> toggleState;
+
+    // Run a REAPER action from a section other than Main (MIDI Editor, MIDI
+    // Event List, Crossfade Editor). Main actions keep going through the
+    // __reaper_action__ builtin. Added 20.11.2026; ORC leaves it unset.
+    std::function<void(int section, int commandId)> runSectionAction;
 };
 
 // The installed host. Never null; the default answers nothing.

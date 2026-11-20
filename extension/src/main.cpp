@@ -6842,6 +6842,8 @@ struct PendingInput {
                          // signed direction where the op has one, else the
                          // press/release edge for the held drag.
         LaneOp,          // a fixed-lanes verb (lane_* builtins). strip = LaneOpCode.
+        SectionAction,   // a REAPER action outside Main. strip = sectionCode_(),
+                         // value = command id. See runSectionAction_.
         // MIDI CC layer (docs/midi-cc-layer-plan.md). Kept last and together:
         // the drain hands the whole range to ccApplyInput_.
         CcFader,         // strip = fader, value = UF8 position 0..kUf8FaderPbMax
@@ -6853,6 +6855,60 @@ struct PendingInput {
     uint8_t strip;
     double  value;
 };
+
+// ⇨ REAPER ACTIONS OUTSIDE MAIN (20.11.2026, forum: MIDI Editor actions on the
+// user jog modes). The section rides in PendingInput::strip, a byte, so it
+// travels as a small code. 0 = Main or a section nothing here can run.
+static uint8_t sectionCode_(int section)
+{
+    namespace bnd = uf8::bindings;
+    switch (section) {
+        case bnd::kActionSectionMidiEditor:    return 1;
+        case bnd::kActionSectionMidiEventList: return 2;
+        case bnd::kActionSectionCrossfade:     return 3;
+        default:                               return 0;
+    }
+}
+static int sectionFromCode_(uint8_t code)
+{
+    namespace bnd = uf8::bindings;
+    switch (code) {
+        case 1:  return bnd::kActionSectionMidiEditor;
+        case 2:  return bnd::kActionSectionMidiEventList;
+        case 3:  return bnd::kActionSectionCrossfade;
+        default: return bnd::kActionSectionMain;
+    }
+}
+// Main thread only. The MIDI pair goes to the last focused MIDI editor, as
+// REAPER's own OSC surface does it (MIDIACTION / MIDILISTACTION); with none
+// open, or the editor in the other view, REAPER returns false and nothing runs.
+static void runSectionAction_(int section, int cmd)
+{
+    namespace bnd = uf8::bindings;
+    if (cmd <= 0) return;
+    switch (section) {
+        case bnd::kActionSectionMidiEditor:
+            if (MIDIEditor_LastFocused_OnCommand) MIDIEditor_LastFocused_OnCommand(cmd, false);
+            break;
+        case bnd::kActionSectionMidiEventList:
+            if (MIDIEditor_LastFocused_OnCommand) MIDIEditor_LastFocused_OnCommand(cmd, true);
+            break;
+        case bnd::kActionSectionCrossfade:
+            if (CrossfadeEditor_OnCommand) CrossfadeEditor_OnCommand(cmd);
+            break;
+        default:
+            Main_OnCommand(cmd, 0);
+            break;
+    }
+}
+// 1 on, 0 off, -1 no toggle state, in the action's own section.
+static int actionToggleState_(int section, int cmd)
+{
+    if (cmd <= 0) return -1;
+    if (section == uf8::bindings::kActionSectionMain)
+        return GetToggleCommandState2 ? GetToggleCommandState2(SectionFromUniqueID(0), cmd) : -1;
+    return GetToggleCommandStateEx ? GetToggleCommandStateEx(section, cmd) : -1;
+}
 
 // The named jog-mode actions, carried in PendingInput::strip. Each one is a
 // single Jog Actions builtin; the drain runs it on the main thread. Shift on the
@@ -15943,6 +15999,10 @@ void uf1JogUserDispatch_(int slot, int count)
         return;
     }
     if (sl.type == bnd::ActionType::Reaper) {
+        // KBD_OnMainActionEx is Main only, and REAPER has no call that hands a
+        // MIDI Editor action a value (REAPER's own OSC fires MIDIACTION without
+        // one). Settings says so; the number must not reach Main.
+        if (sl.section != bnd::kActionSectionMain) return;
         int cmd = 0;
         if (!sl.action.empty() && sl.action[0] == '_') cmd = NamedCommandLookup(sl.action.c_str());
         else                                            cmd = std::atoi(sl.action.c_str());
@@ -23447,6 +23507,10 @@ void drainInputQueue()
         // per-strip track resolution below.
         if (e.kind == PendingInput::MainAction) {
             Main_OnCommand(static_cast<int>(e.value), 0);
+            continue;
+        }
+        if (e.kind == PendingInput::SectionAction) {
+            runSectionAction_(sectionFromCode_(e.strip), static_cast<int>(e.value));
             continue;
         }
         if (e.kind == PendingInput::Uf1JogNav) {
@@ -36021,7 +36085,7 @@ static bool uf1BindingLedState_(const uf8::bindings::Binding& bd,
             int aid = std::atoi(modSlot.action.c_str());
             if (aid <= 0) aid = NamedCommandLookup(modSlot.action.c_str());
             if (aid > 0) {
-                const int st = GetToggleCommandState2(SectionFromUniqueID(0), aid);
+                const int st = actionToggleState_(modSlot.section, aid);
                 if (st >= 0) { stateful = true; active = (st == 1); }
             }
         }
@@ -56848,6 +56912,16 @@ namespace {
     // UF1 soft-key bank destination coords. Only valid when mode == Uf1Bank.
     int                          g_pickerUf1Bank   = 0;
     int                          g_pickerUf1Slot   = 0;
+    // The action list section the next session opens in, and the one the
+    // picked action is stored with. Set by the editor's section menu right
+    // before each Start (reasixty_actionPickerSetSection).
+    int                          g_pickerSection   = 0;
+}
+
+void reasixty_actionPickerSetSection(int section)
+{
+    g_pickerSection = uf8::bindings::actionSectionKnown(section)
+                        ? section : uf8::bindings::kActionSectionMain;
 }
 
 void reasixty_actionPickerStart(int layer, uf8::bindings::ButtonId id,
@@ -56861,7 +56935,7 @@ void reasixty_actionPickerStart(int layer, uf8::bindings::ButtonId id,
     g_pickerModIdx    = modIdx;
     g_pickerStepIdx   = stepIdx;
     g_pickerActive    = true;
-    PromptForAction(/*session_mode*/ 1, /*init_id*/ 0, /*section_id*/ 0);
+    PromptForAction(/*session_mode*/ 1, /*init_id*/ 0, /*section_id*/ g_pickerSection);
 }
 
 bool reasixty_actionPickerActiveFor(int layer, uf8::bindings::ButtonId id,
@@ -56890,7 +56964,7 @@ void reasixty_actionPickerStartDouble(int layer, uf8::bindings::ButtonId id,
     g_pickerModIdx    = modIdx;
     g_pickerStepIdx   = stepIdx;
     g_pickerActive    = true;
-    PromptForAction(/*session_mode*/ 1, /*init_id*/ 0, /*section_id*/ 0);
+    PromptForAction(/*session_mode*/ 1, /*init_id*/ 0, /*section_id*/ g_pickerSection);
 }
 
 bool reasixty_actionPickerActiveForDouble(int layer, uf8::bindings::ButtonId id,
@@ -56921,7 +56995,7 @@ void reasixty_actionPickerStartUserQuick(int uqLayer, int uqQuick,
     g_pickerModIdx    = modIdx;
     g_pickerStepIdx   = stepIdx;
     g_pickerActive    = true;
-    PromptForAction(/*session_mode*/ 1, /*init_id*/ 0, /*section_id*/ 0);
+    PromptForAction(/*session_mode*/ 1, /*init_id*/ 0, /*section_id*/ g_pickerSection);
 }
 
 bool reasixty_actionPickerActiveForUserQuick(int uqLayer, int uqQuick,
@@ -56949,7 +57023,7 @@ void reasixty_actionPickerStartUf1Bank(int bank, int slot,
     g_pickerModIdx    = modIdx;
     g_pickerStepIdx   = stepIdx;
     g_pickerActive    = true;
-    PromptForAction(/*session_mode*/ 1, /*init_id*/ 0, /*section_id*/ 0);
+    PromptForAction(/*session_mode*/ 1, /*init_id*/ 0, /*section_id*/ g_pickerSection);
 }
 
 bool reasixty_actionPickerActiveForUf1Bank(int bank, int slot,
@@ -56966,21 +57040,25 @@ bool reasixty_actionPickerActiveForUf1Bank(int bank, int slot,
 void reasixty_actionPickerCancel()
 {
     if (!g_pickerActive) return;
-    PromptForAction(/*session_mode*/ -1, 0, 0);
+    PromptForAction(/*session_mode*/ -1, 0, g_pickerSection);
     g_pickerActive = false;
 }
 
 // Resolve a stored action string ("40044" or "_RS123abc") back to a human-
 // readable name via REAPER's kbd_getTextFromCmd. Returns empty for empty
 // input, "(unresolved)" if NamedCommandLookup fails (stale named cmd).
-std::string reasixty_resolveActionName(const std::string& action)
+std::string reasixty_resolveActionName(const std::string& action, int section)
 {
     if (action.empty()) return "";
     int cmd = (action[0] == '_')
         ? NamedCommandLookup(action.c_str())
         : std::atoi(action.c_str());
     if (cmd <= 0) return "(unresolved)";
-    const char* n = kbd_getTextFromCmd(cmd, nullptr);
+    // The name in the action's own section: nullptr is Main, where a MIDI
+    // Editor number names some other action.
+    KbdSectionInfo* sec = (section != uf8::bindings::kActionSectionMain && SectionFromUniqueID)
+                            ? SectionFromUniqueID(section) : nullptr;
+    const char* n = kbd_getTextFromCmd(cmd, sec);
     return (n && *n) ? std::string(n) : std::string("(no name)");
 }
 
@@ -56989,14 +57067,14 @@ std::string reasixty_resolveActionName(const std::string& action)
 // (no toggle state). The bindings editor uses this to auto-fire toggle
 // actions on the inactive edge (no opt-in needed) while exposing a
 // "fire again on inactive" checkbox for one-shot actions.
-bool reasixty_actionIsToggle(const std::string& action)
+bool reasixty_actionIsToggle(const std::string& action, int section)
 {
     if (action.empty()) return false;
     int cmd = (action[0] == '_')
         ? NamedCommandLookup(action.c_str())
         : std::atoi(action.c_str());
     if (cmd <= 0) return false;
-    return GetToggleCommandState2(SectionFromUniqueID(0), cmd) >= 0;
+    return actionToggleState_(section, cmd) >= 0;
 }
 
 // Save-file dialog. macOS goes straight to NSSavePanel via the small
@@ -57374,14 +57452,17 @@ bool reasixty_importUc1ViaDialog(int layer)
 
 // File picker → register ReaScript → return the action string suitable
 // for storage in Binding.action. Empty string on cancel/error.
-std::string reasixty_loadReaScript()
+// Registered in the section the step runs in, so the script sits in that
+// section of the Action List next to the actions it is used with.
+std::string reasixty_loadReaScript(int section)
 {
     char buf[4096] = {0};
     if (!GetUserFileNameForRead(buf, "Pick a ReaScript",
                                 "lua;eel;py")) {
         return "";
     }
-    int cmdId = AddRemoveReaScript(/*add*/ true, /*sectionID*/ 0,
+    if (!uf8::bindings::actionSectionKnown(section)) section = uf8::bindings::kActionSectionMain;
+    int cmdId = AddRemoveReaScript(/*add*/ true, /*sectionID*/ section,
                                    buf, /*commit*/ true);
     if (cmdId <= 0) return "";
     const char* nc = ReverseNamedCommandLookup(cmdId);
@@ -57395,7 +57476,7 @@ std::string reasixty_loadReaScript()
 void reasixty_actionPickerPoll()
 {
     if (!g_pickerActive) return;
-    int r = PromptForAction(/*session_mode*/ 0, 0, 0);
+    int r = PromptForAction(/*session_mode*/ 0, 0, g_pickerSection);
     if (r == 0) return;          // pending
     g_pickerActive = false;
     if (r == -1) return;         // cancelled
@@ -57432,6 +57513,7 @@ void reasixty_actionPickerPoll()
     // step to BE a REAPER action — set the type so the inline picker
     // re-renders into the REAPER section without a separate radio click.
     target.type   = ActionType::Reaper;
+    target.section = g_pickerSection;
     // Browse is the SECOND way to rebind a key, and it bypasses the editor's
     // own auto-label pass entirely — which is how the UF1 SOFT key kept
     // announcing "PIN SET" for an action it no longer fired (forum 4.2). Same
@@ -57463,7 +57545,7 @@ void reasixty_actionPickerPoll()
                 sh && *sh) n = sh;
         }
         if (n.empty()) {
-            n = reasixty_resolveActionName(actionStr);
+            n = reasixty_resolveActionName(actionStr, g_pickerSection);
             if (n == "(unresolved)" || n == "(no name)") n.clear();
         }
         bd.label = n;
@@ -61844,9 +61926,14 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         bh.namedCommand = [](const char* name) -> int {
             return NamedCommandLookup ? NamedCommandLookup(name) : 0;
         };
-        bh.toggleState = [](int commandId) -> int {
-            return GetToggleCommandState2
-                ? GetToggleCommandState2(SectionFromUniqueID(0), commandId) : -1;
+        bh.toggleState = [](int section, int commandId) -> int {
+            return actionToggleState_(section, commandId);
+        };
+        // Queued like __reaper_action__: the surfaces fire off the main thread.
+        bh.runSectionAction = [](int section, int commandId) {
+            if (commandId > 0 && sectionCode_(section) != 0)
+                queueInput({PendingInput::SectionAction, sectionCode_(section),
+                            static_cast<double>(commandId)});
         };
         bh.sendKeyChord = [](const keymacro::KeyChord& c) {
             keymacro::sendChordToReaper(c);

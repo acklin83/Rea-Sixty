@@ -179,8 +179,8 @@ int main()
     }
     // ── where the choice is offered ──────────────────────────────────────────
     {
-        const auto yes = [](const std::string&) { return true; };
-        const auto no  = [](const std::string&) { return false; };
+        const auto yes = [](const std::string&, int) { return true; };
+        const auto no  = [](const std::string&, int) { return false; };
         EXPECT(!bnd::offersPressChoice(keyWith(bnd::ActionType::Builtin, "t_once", Behavior::Momentary), no));
         EXPECT(!bnd::offersPressChoice(keyWith(bnd::ActionType::Builtin, "t_select", Behavior::Toggle), no));
         EXPECT(bnd::offersPressChoice(keyWith(bnd::ActionType::Builtin, "t_switch", Behavior::Momentary), no));

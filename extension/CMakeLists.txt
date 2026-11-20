@@ -800,6 +800,15 @@ if(NOT WIN32)
     target_link_libraries(test_press_mode PRIVATE Threads::Threads)
     add_test(NAME press_mode COMMAND test_press_mode)
 
+    # REAPER actions outside Main: the step's section through save and reload,
+    # an unknown one falling back to Main, the press, toggle and press choice
+    # asked in the step's own section. Runs the real bindings engine.
+    add_executable(test_action_sections tests/test_action_sections.cpp
+        src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp)
+    target_include_directories(test_action_sections PRIVATE src "${WDL_DIR}")
+    target_link_libraries(test_action_sections PRIVATE Threads::Threads)
+    add_test(NAME action_sections COMMAND test_action_sections)
+
     # ORC's transport keys: one decision for press and lamp, in ORC's colours.
 
     # The UF1 jog in Grid unit never falls between the grid (JogGrid.h, header only).
