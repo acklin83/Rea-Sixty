@@ -52,3 +52,14 @@ vor dem Import ja, Endung `.orcprofile`.
 - Website `/orc` nimmt zwei ORC-Bilder; ob General/Soft Keys darunter sind, nicht geprüft
   (Branch `website`).
 - Antwort an Dave im Forum.
+
+## Nachtrag: Tausch und Release 1.8.0
+
+- Dev-Build `f0237a86` mit Developer ID nach /Applications (ORC beendet, Anmeldeobjekt blieb).
+- ORC 1.8.0 (Build 16, `989e3f0a`) released: https://github.com/acklin83/ORC/releases/tag/v1.8.0.
+  App + DMG notarisiert, im DMG geprüft (1.8.0, Build 16, Profile drin), Windows-Installer aus
+  CI, Handbuch ORC `53d01ea` (Pages live mit 1.8.0), Website-Knopf `fcd562ed` nach `private`
+  gepusht und gebaut (verify-build grün).
+- Website-Deploy auf den VPS sperrte der Auto-Modus: Frank deployt.
+- Forenantwort an Dave als Entwurf an Frank, nicht gepostet.
+- Die ORC-Seite der Website bindet keine `docs/screenshots` mehr ein (offener Punkt oben erledigt).
