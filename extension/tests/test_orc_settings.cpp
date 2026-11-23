@@ -17,8 +17,10 @@
 #include "HueManager.h"
 #include "ObsManager.h"
 #include "OrcConfig.h"
+#include "OrcFiles.h"
 #include "OrcHandover.h"
 #include "OrcModes.h"
+#include "OrcProfile.h"
 #include "OrcSettingsModel.h"
 #include "Performers.h"
 #include "PhonesServer.h"
@@ -27,6 +29,7 @@
 #include "RmeManager.h"
 #include "RmeSoftKeys.h"
 #include "SettingsServer.h"
+#include "Sha256.h"
 
 #include "TestScratch.h"
 
@@ -581,6 +584,139 @@ static void testRmeJsonWhole()
     EXPECT(!leftover);
 }
 
+// ⇨ THE LAMP COLOURS (Frank 23.11.2026, forum): SEND/PLUG-IN in rme.json, the
+// bank keys in orc.json, both through the page's colour menus.
+static void testKeyColours()
+{
+    set::Context c;
+    set::apply(R"({"t":"submixLed","i":3,"active":1,"v":"2"})", c);       // Red
+    set::apply(R"({"t":"submixLed","i":3,"active":0,"v":"4"})", c);       // Blue
+    auto k = rme::manager().config().uf8SubmixLeds[3];
+    EXPECT(k.on == 0xFF0000 && k.onBri == 2 && k.off == 0x0000FF && k.offBri == 1);
+    set::apply(R"({"t":"submixLed","i":3,"active":0,"v":"0"})", c);       // Off
+    k = rme::manager().config().uf8SubmixLeds[3];
+    EXPECT(k.off == 0x0000FF && k.offBri == 0 && k.on == 0xFF0000);
+    set::apply(R"({"t":"submixLed","i":9,"active":1,"v":"2"})", c);       // no such key
+    EXPECT(has(set::stateJson(c), "\"submixLed\":["));
+
+    set::apply(R"({"t":"skBankLed","b":2,"active":1,"v":"3"})", c);       // Green
+    set::apply(R"({"t":"skBankLed","b":2,"active":0,"v":"0"})", c);       // Off
+    bnd::SubBankLed b = bnd::getRmeBankLed(2);
+    EXPECT(b.color[0] == 0 && b.color[1] == 0xFF && b.color[2] == 0);
+    EXPECT(b.brightness == bnd::Brightness::Bright && b.inactiveBrightness == bnd::Brightness::Off);
+    EXPECT(has(file(orc::supportDir() + "/orc.json"), "\"rme_bank_leds\""));
+    // From the file again, as the next start (and Rea-Sixty) read it.
+    bnd::load();
+    b = bnd::getRmeBankLed(2);
+    EXPECT(b.color[1] == 0xFF && b.inactiveBrightness == bnd::Brightness::Off);
+    // The bank back to the factory takes its colours along.
+    set::apply(R"({"t":"skFactory","b":2})", c);
+    b = bnd::getRmeBankLed(2);
+    EXPECT(b.color[0] == 0xFF && b.color[1] == 0xFF && b.inactiveBrightness == bnd::Brightness::Dim);
+    EXPECT(bnd::getRmeBankLed(-1).brightness == bnd::Brightness::Bright);
+}
+
+// ⇨ PROFILES (OrcProfile.h): pack, check, and the import at the next start.
+static void testProfile()
+{
+    namespace pr = orc::profile;
+    {
+        bool ok = false;
+        const std::string bin("\x00\xFF\x10 Gr\xFCn\n", 9);
+        EXPECT(pr::base64Decode(reasixty::base64Encode(bin.data(), bin.size()), ok) == bin && ok);
+        pr::base64Decode("ab$c", ok);
+        EXPECT(!ok);
+    }
+    std::vector<pr::File> files;
+    pr::Info info;
+    std::string err;
+    EXPECT(!pr::unpack("{}", files, info, err) && !err.empty());
+    EXPECT(!pr::unpack(R"({"format":"orc-profile","version":2,"files":{}})", files, info, err));
+    EXPECT(has(err, "newer"));
+    EXPECT(!pr::unpack(pr::pack({ { "orc.json", "{}" } }, pr::Info{ 1, "x", "y" }), files, info, err));
+    EXPECT(!pr::unpack(R"({"format":"orc-profile","version":1,"files":{"orc.json":"*","rme.json":""}})",
+                       files, info, err));
+    EXPECT(pr::unpack(pr::pack({ { "orc.json", "A" }, { "rme.json", "B" } }, pr::Info{ 1, "1.7", "now" }),
+                      files, info, err));
+    EXPECT(files.size() == 2 && files[0].data == "A" && info.orc == "1.7" && info.created == "now");
+
+    // The connection stays the computer's, the rest is the profile's.
+    {
+        rme::Config here, there;
+        here.enabled = true;  here.host = "127.0.0.1";  here.sendPort = 7001; here.recvPort = 9001;
+        there.enabled = false; there.host = "10.0.0.9"; there.sendPort = 1;   there.recvPort = 2;
+        there.uf8SubmixKeys[0] = "main";
+        there.jogStepDb = 2.5;
+        rme::Config m;
+        EXPECT(rme::configFromJson(pr::mergeRme(rme::configToJson(here), rme::configToJson(there)), m));
+        EXPECT(m.enabled && m.host == "127.0.0.1" && m.sendPort == 7001 && m.recvPort == 9001);
+        EXPECT(m.uf8SubmixKeys[0] == "main" && m.jogStepDb == 2.5);
+        ph::Settings a, b, r;
+        a.enabled = true; a.webPort = 8100; a.studio = "Here";
+        b.enabled = false; b.webPort = 1; b.studio = "There"; b.logo = "moreme-logo.svg";
+        EXPECT(ph::parseSettings(pr::mergeMoreMe(ph::settingsJson(a), ph::settingsJson(b)), r));
+        EXPECT(r.enabled && r.webPort == 8100 && r.studio == "There" && r.logo == "moreme-logo.svg");
+    }
+
+    // Export, change things, import: the files come back, the connection does not.
+    const std::string d = orc::supportDir();
+    rme::Config cfg = rme::manager().config();
+    cfg.uf8SubmixKeys[7] = "output:3";
+    cfg.host = "127.0.0.1";
+    EXPECT(orc::saveRmeConfig(cfg));
+    EXPECT(orc_handover::writeFile(d + "/moreme-performers.json", "{\"performers\":[]}"));
+    orc::modes::write("dynamount_presets", "profile-presets");
+    const std::string out = d + "/test." + pr::kExtension;
+    EXPECT(pr::exportTo(out, err));
+    EXPECT(pr::check(out, info, err) && info.version == 1);
+    const std::string orcJson = file(d + "/orc.json");
+
+    cfg.uf8SubmixKeys[7] = "";
+    cfg.host = "192.168.1.5";
+    EXPECT(orc::saveRmeConfig(cfg));
+    orc_files::removeFile(d + "/moreme-performers.json");
+    orc::modes::write("dynamount_presets", "other");
+    EXPECT(orc_handover::writeFile(d + "/orc.json", "{\"version\": 1}"));
+
+    EXPECT(pr::applyStaged().empty());                     // nothing staged
+    EXPECT(pr::stage(out, err));
+    EXPECT(fileExists(d + "/profile-import.orcprofile"));
+    const std::string line = pr::applyStaged();
+    EXPECT(has(line, "Profile imported") && line == pr::lastApplied());
+    EXPECT(!fileExists(d + "/profile-import.orcprofile"));
+    EXPECT(file(d + "/orc.json") == orcJson);
+    EXPECT(fileExists(d + "/moreme-performers.json"));
+    EXPECT(orc::modes::read("dynamount_presets") == "profile-presets");
+    rme::Config back;
+    EXPECT(orc::loadRmeConfig(back));
+    EXPECT(back.uf8SubmixKeys[7] == "output:3" && back.host == "192.168.1.5");
+    // The settings before it, as a profile of their own.
+    bool backup = false;
+    for (const auto& e : std::filesystem::directory_iterator(d + "/profiles"))
+        if (e.path().filename().string().rfind("before-import-", 0) == 0) {
+            backup = true;
+            EXPECT(pr::check(e.path().string(), info, err));
+        }
+    EXPECT(backup);
+    // No temporary file left next to the real ones.
+    for (const auto& e : std::filesystem::directory_iterator(d))
+        EXPECT(e.path().extension() != ".import");
+    // A file that is no profile is not staged.
+    EXPECT(orc_handover::writeFile(d + "/bad." + pr::kExtension, "hello"));
+    EXPECT(!pr::stage(d + "/bad." + pr::kExtension, err) && !fileExists(d + "/profile-import.orcprofile"));
+
+    // The page: Import… answers with what the file is, Cancel forgets it.
+    set::Context c;
+    set::profileImportChosen(out, c);
+    EXPECT(c.profilePending == out && has(set::stateJson(c), "\"pending\":\"test.orcprofile\""));
+    set::apply(R"({"t":"profileCancel"})", c);
+    EXPECT(c.profilePending.empty() && !orc::restartRequested());
+    set::profileImportChosen(d + "/bad." + pr::kExtension, c);
+    EXPECT(c.profilePending.empty() && !c.error.empty());
+    bnd::load();
+    EXPECT(orc::saveRmeConfig(rme::manager().config()));
+}
+
 // ⛔ A backslash through the files: wdl_json_parser reads two of them as a quote.
 static void testBackslashInFiles()
 {
@@ -778,6 +914,8 @@ int main()
     testModes();
     testRmeJsonWhole();
     testMoreme();
+    testKeyColours();
+    testProfile();
     testBackslashInFiles();
     testServer(ORC_SETTINGS_DIR);
     testPageHasEverything(ORC_SETTINGS_DIR);

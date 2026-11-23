@@ -47,4 +47,10 @@ void runApp(Surface& surface, const std::function<bool()>& interrupted,
 // this one leaves at once. macOS keeps it to one by itself.
 bool handedToRunningCopy();
 
+// ⇨ START A NEW ORC (an imported profile, OrcProfile.h). main() calls it last,
+// after closeDown, so the new one finds the devices and the files let go of. On
+// Windows the one-ORC mutex is released first, or the new one would hand itself
+// back to this one and leave.
+void relaunch();
+
 } // namespace orc

@@ -188,6 +188,15 @@ std::string configToJson(const Config& c)
        + (c.uf8ShowMainOnChange ? "true" : "false") + ", \"submixKeys\": [";
     for (int i = 0; i < Config::kUf8SubmixKeys; ++i)
         j += std::string(i ? ", " : "") + "\"" + clean(c.uf8SubmixKeys[i]) + "\"";
+    j += "],\n    \"submixLeds\": [";
+    for (int i = 0; i < Config::kUf8SubmixKeys; ++i) {
+        const KeyColours& k = c.uf8SubmixLeds[i];
+        snprintf(buf, sizeof(buf),
+            "%s{ \"on\": \"%06X\", \"onBri\": %d, \"off\": \"%06X\", \"offBri\": %d }",
+            i ? ", " : "", static_cast<unsigned>(k.on & 0xFFFFFFu), k.onBri,
+            static_cast<unsigned>(k.off & 0xFFFFFFu), k.offBri);
+        j += buf;
+    }
     j += "] },\n";
     snprintf(buf, sizeof(buf),
         "  \"brightness\": { \"led\": %d, \"lcd\": %d },\n"
@@ -273,6 +282,19 @@ bool configFromJson(const std::string& json, Config& out)
             for (int i = 0; i < Config::kUf8SubmixKeys; ++i)
                 if (const wdl_json_element* e = keys->enum_item(i))
                     if (const char* v = e->get_string_value()) c.uf8SubmixKeys[i] = v;
+        if (const wdl_json_element* leds = u8->get_item_by_name("submixLeds"); leds && leds->is_array())
+            for (int i = 0; i < Config::kUf8SubmixKeys; ++i) {
+                const wdl_json_element* e = leds->enum_item(i);
+                if (!e || !e->is_object()) continue;
+                KeyColours& k = c.uf8SubmixLeds[i];
+                auto bri = [](const char* v) { return std::clamp(std::atoi(v), 0, 2); };
+                if (const char* v = e->get_string_by_name("on"))
+                    k.on = static_cast<std::uint32_t>(std::strtoul(v, nullptr, 16)) & 0xFFFFFFu;
+                if (const char* v = e->get_string_by_name("off"))
+                    k.off = static_cast<std::uint32_t>(std::strtoul(v, nullptr, 16)) & 0xFFFFFFu;
+                if (const char* v = e->get_string_by_name("onBri", true))  k.onBri  = bri(v);
+                if (const char* v = e->get_string_by_name("offBri", true)) k.offBri = bri(v);
+            }
     }
     if (const wdl_json_element* br = root->get_item_by_name("brightness"); br && br->is_object()) {
         if (const char* v = br->get_string_by_name("led", true)) c.brightLed = std::atoi(v);

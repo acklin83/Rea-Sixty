@@ -1,6 +1,7 @@
 #import "OrcUi.h"
 #include "OrcLogo.h"
 #include <cmath>
+#include <cstdio>
 #import "OrcWebWindow.h"
 
 #import <Cocoa/Cocoa.h>
@@ -220,6 +221,25 @@ static NSImage* qrImage(NSString* text, CGFloat side)
 namespace orc {
 
 bool handedToRunningCopy() { return false; }
+
+void relaunch()
+{
+    // The bundle through LaunchServices (-n: a new copy, this one is on its way
+    // out); a bare binary out of the build directory, as itself.
+    @autoreleasepool {
+        NSString* bundle = [[NSBundle mainBundle] bundlePath];
+        NSTask* t = [[NSTask alloc] init];
+        if ([bundle hasSuffix:@".app"]) {
+            t.executableURL = [NSURL fileURLWithPath:@"/usr/bin/open"];
+            t.arguments = @[ @"-n", bundle ];
+        } else {
+            t.executableURL = [[NSBundle mainBundle] executableURL];
+        }
+        NSError* err = nil;
+        if (![t launchAndReturnError:&err])
+            std::printf("ORC: could not start again: %s\n", err.localizedDescription.UTF8String ?: "");
+    }
+}
 
 void runApp(Surface& surface, const std::function<bool()>& interrupted, const std::function<void()>&)
 {

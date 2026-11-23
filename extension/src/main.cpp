@@ -46378,9 +46378,19 @@ void pushUf8GlobalLeds()
                 // The side-car's bank keys on the left UF8 (sideCarBankKeyLamp_).
                 if (scPages && u == 0) {
                     const int lamp = sideCarBankKeyLamp_(p);
-                    sendUf8GlobalLedDirect_(kPages[p], lamp == 2 ? uf8::GlobalLedState::Bright
-                                                     : lamp == 1 ? uf8::GlobalLedState::Dim
-                                                                 : uf8::GlobalLedState::Off);
+                    if (!lamp) {
+                        sendUf8GlobalLedDirect_(kPages[p], uf8::GlobalLedState::Off);
+                        continue;
+                    }
+                    // ⇨ THE BANK'S OWN COLOURS (orc.json, Frank 23.11.2026), as in
+                    // ORC: Active for the bank showing, Inactive for another.
+                    const auto led = uf8::bindings::getRmeBankLed(p);
+                    const bool on  = (lamp == 2);
+                    const uint8_t* c = on ? led.color : led.inactiveColor;
+                    const uf8::LedColour col = uf8::ledColourForTrackRgb(
+                        (uint32_t(c[0]) << 16) | (uint32_t(c[1]) << 8) | uint32_t(c[2]));
+                    sendUf8GlobalLedDirect_(kPages[p],
+                        brightnessToState_(on ? led.brightness : led.inactiveBrightness), &col);
                 } else if (ccOn)
                     sendUf8GlobalLedDirect_(kPages[p], p == lit
                         ? uf8::GlobalLedState::Bright : uf8::GlobalLedState::Dim);
@@ -46604,12 +46614,14 @@ void pushUf8GlobalLeds()
                 const reasixty::rme::Config rcfg = reasixty::rme::manager().config();
                 const uf8::LedColour cueCol = uf8::ledColourYellow();
                 for (int i = 0; i < 8; ++i) {
-                    const int lamp = reasixty::rme::uf8side::submixKeyLamp(rst, g_rmeIn, rcfg, i);
-                    const bool cue = reasixty::rme::uf8side::submixKeyCued(rst, rcfg, i);
-                    sendUf8GlobalLedDirect_(kSpLeds[i], lamp == 2 ? uf8::GlobalLedState::Bright
-                                                      : lamp == 1 ? uf8::GlobalLedState::Dim
-                                                                  : uf8::GlobalLedState::Off,
-                                            cue ? &cueCol : nullptr);
+                    // The key's colours from rme.json, the cue yellow over them
+                    // (Uf8Rme::submixKeyLed, shared with ORC).
+                    const auto k = reasixty::rme::uf8side::submixKeyLed(rst, g_rmeIn, rcfg, i);
+                    const uf8::LedColour col = k.cue ? cueCol : uf8::ledColourForTrackRgb(k.rgb);
+                    sendUf8GlobalLedDirect_(kSpLeds[i], k.state == 2 ? uf8::GlobalLedState::Bright
+                                                      : k.state == 1 ? uf8::GlobalLedState::Dim
+                                                                     : uf8::GlobalLedState::Off,
+                                            &col);
                 }
             }
             if (units > 1) {

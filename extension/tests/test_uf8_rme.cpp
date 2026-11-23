@@ -156,6 +156,35 @@ int main()
         EXPECT(!u8::submixKeyCued(s2, c2, 6));
         s2.cueChannel = 4;
         EXPECT(u8::submixKeyCued(s2, c2, 6) && !u8::submixKeyCued(s2, c2, 5));
+        // ── each key its colours, the cue yellow over them (Frank 23.11.2026) ──
+        {
+            Config c3 = c2;
+            c3.uf8SubmixLeds[6] = { 0xFF0000, 2, 0x0000FF, 1 };
+            c3.uf8SubmixLeds[5] = { 0x00FF00, 2, 0x00FF00, 0 };
+            {   // The colours survive the file; a file without them keeps white.
+                Config back;
+                EXPECT(reasixty::rme::configFromJson(reasixty::rme::configToJson(c3), back));
+                EXPECT(back.uf8SubmixLeds[6] == c3.uf8SubmixLeds[6]);
+                EXPECT(back.uf8SubmixLeds[5] == c3.uf8SubmixLeds[5]);
+                EXPECT(back.uf8SubmixLeds[0] == reasixty::rme::KeyColours{});
+                Config old;
+                EXPECT(reasixty::rme::configFromJson("{\"version\": 6, \"uf8\": {\"submixKeys\": []}}", old));
+                EXPECT(old.uf8SubmixLeds[6] == reasixty::rme::KeyColours{});
+            }
+            auto k = u8::submixKeyLed(s2, i2, c3, 6);           // cued: yellow, at its lamp
+            EXPECT(k.cue && k.state == 1);
+            s2.cueChannel = -1;
+            k = u8::submixKeyLed(s2, i2, c3, 6);                // another output: Inactive
+            EXPECT(!k.cue && k.state == 1 && k.rgb == 0x0000FF);
+            i2.submix.store(4);
+            k = u8::submixKeyLed(s2, i2, c3, 6);                // in play: Active
+            EXPECT(k.state == 2 && k.rgb == 0xFF0000);
+            k = u8::submixKeyLed(s2, i2, c3, 5);                // Inactive off: dark
+            EXPECT(k.state == 0);
+            EXPECT(u8::submixKeyLed(s2, i2, c3, 7).state == 0);  // no output: dark
+            i2.submix.store(0);
+            s2.cueChannel = 4;
+        }
         w = u8::cueKey(s2, c2, 6);                           // again: off
         EXPECT(w.size() == 1 && w[0].second == -1.0f);
         EXPECT(u8::cueKey(s2, c2, 7).empty());               // a dark key sends nothing

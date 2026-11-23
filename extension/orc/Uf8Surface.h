@@ -126,7 +126,8 @@ class Uf8Surface {
     // the hand waits here.
     std::array<std::atomic<bool>, 8>         dynPending_{};
     std::array<std::atomic<double>, 8>       dynPendingNorm_{};
-    std::array<int, 26>                      cLed_{};
+    // A lamp's state and colour in one key (paintLeds_), -1 = not sent yet.
+    std::array<std::int64_t, 26>             cLed_{};
     std::array<std::int64_t, kUserKeyCount>  cUser_{};
     std::atomic<bool>                        repaint_{true};
     std::atomic<int>                         led_{4}, lcd_{4};   // Brightness.h steps

@@ -277,6 +277,21 @@ LRESULT CALLBACK trayProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
 
 } // namespace
 
+void relaunch()
+{
+    if (g_oneOrc) { ::CloseHandle(g_oneOrc); g_oneOrc = nullptr; }
+    wchar_t exe[MAX_PATH];
+    const DWORD n = ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return;
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (::CreateProcessW(exe, nullptr, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+        ::CloseHandle(pi.hThread);
+        ::CloseHandle(pi.hProcess);
+    }
+}
+
 bool handedToRunningCopy()
 {
     // ⇨ ONE ORC. Two would fight over the USB devices, the page port and orc.pid. A

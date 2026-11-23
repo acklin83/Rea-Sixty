@@ -25,6 +25,8 @@ namespace {
 
 constexpr wchar_t kWindowClass[] = L"ORC.Settings";
 constexpr UINT     kChooseLogo   = WM_APP + 10;
+constexpr UINT     kProfileOut   = WM_APP + 11;
+constexpr UINT     kProfileIn    = WM_APP + 12;
 constexpr UINT_PTR kLoginTimer   = 1;
 constexpr UINT_PTR kCloseTimer   = 2;
 constexpr int      kWantW = 1280, kWantH = 820, kMinW = 620, kMinH = 420;
@@ -93,6 +95,30 @@ void chooseLogo()
     const std::string path = orc_files::narrow_(wide);
     ::CoTaskMemFree(wide);
     set::server().post([path](set::Context& c) { set::logoChosen(path, c); });
+}
+
+// ── the profile's file dialogs (OrcProfile.h) ───────────────────────────────
+
+void chooseProfile(bool save)
+{
+    ComPtr<IFileDialog> dlg;
+    const HRESULT hr = save
+        ? ::CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))
+        : ::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg));
+    if (FAILED(hr)) return;
+    const COMDLG_FILTERSPEC types[] = { { L"ORC profile", L"*.orcprofile" } };
+    dlg->SetFileTypes(1, types);
+    dlg->SetDefaultExtension(L"orcprofile");
+    if (save) dlg->SetFileName(L"ORC.orcprofile");
+    if (FAILED(dlg->Show(g_wnd))) return;   // also: the user cancelled
+    ComPtr<IShellItem> item;
+    if (FAILED(dlg->GetResult(&item))) return;
+    PWSTR wide = nullptr;
+    if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &wide))) return;
+    const std::string path = orc_files::narrow_(wide);
+    ::CoTaskMemFree(wide);
+    if (save) set::server().post([path](set::Context& c) { set::profileExportChosen(path, c); });
+    else      set::server().post([path](set::Context& c) { set::profileImportChosen(path, c); });
 }
 
 // ── the web view ─────────────────────────────────────────────────────────────
@@ -317,6 +343,12 @@ LRESULT CALLBACK windowProc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
         case kChooseLogo:
             chooseLogo();
             return 0;
+        case kProfileOut:
+            chooseProfile(true);
+            return 0;
+        case kProfileIn:
+            chooseProfile(false);
+            return 0;
         case WM_CLOSE:
             beginClosing();
             return 0;
@@ -368,6 +400,8 @@ void present(const std::string& page)
         set::Host host;
         host.setLogin   = [](bool on) { setLogin(on); };
         host.chooseLogo = [] { ::PostMessageW(g_wnd, kChooseLogo, 0, 0); };
+        host.chooseProfileExport = [] { ::PostMessageW(g_wnd, kProfileOut, 0, 0); };
+        host.chooseProfileImport = [] { ::PostMessageW(g_wnd, kProfileIn, 0, 0); };
         const std::string address = set::server().start(resourcesDir() + "/settings", host);
         pushLogin();
         if (address.empty()) return;

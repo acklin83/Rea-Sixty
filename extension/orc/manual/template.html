@@ -934,6 +934,9 @@ row the SEL of that output. A key whose output is empty, hidden or not assigned 
 nothing.</p>
 <p>With Link A/B on in TotalMix, Main and Main B light together. Inputs and playbacks still write to
 the one submix you picked.</p>
+<p>Each key has two lamp colours, set on the page <a href="#set-uf8">UF8</a>: <em>Active</em> for the
+submix in play, <em>Inactive</em> for the other outputs. Out of the box both are white, bright and
+dim.</p>
 <p>The list has what TotalMix shows in its Channel Layout. ALL in TotalMix shows hidden channels on the
 computer only: to assign an output, unhide it in every layout you use.</p>
 <p>FINE and a key <a href="#cue">cues</a> its output, the submix stays. The lamp turns yellow; the same
@@ -968,6 +971,8 @@ dark.</p>
 <p>In TotalMix: the <a href="#softkeys">soft-key bank</a> on the soft keys, V-POT bank 1, 1 bank 2,
 up to 5 for bank 6. It is the UF1's bank too, so &lt; &gt; on the UF1 change it as well. The key of
 the bank showing is lit, a key without a bank is dark. In Hue and DynaMount they are dark.</p>
+<p>Each bank sets the colours of its key on the page <a href="#set-softkeys">Soft Keys</a>:
+<em>Active</em> while the bank is showing, <em>Inactive</em> otherwise. Out of the box white.</p>
 </div>
 
 <div class="ctl" id="u-fine" data-uf8="kFine">
@@ -1222,8 +1227,8 @@ on and off and its key is lit while on; a <em>press</em> does one thing each tim
 <h2>The settings window</h2>
 <p>Settings… in the menu bar opens ORC's window, with its pages in the list on the left. Every change
 is saved at once.</p>
-<figure class="shot"><img src="shot:orc-settings-general" width="1600" height="440" loading="lazy"
-alt="ORC's settings window on the page General: the list of pages on the left, TotalMix, Startup and Sleep on the right"></figure>
+<figure class="shot"><img src="shot:orc-settings-general" width="1600" height="480" loading="lazy"
+alt="ORC's settings window on the page General: the list of pages on the left, TotalMix, Startup, Sleep and Profiles on the right"></figure>
 <h3 id="set-connection">General</h3>
 <table class="data"><tbody>
 <tr><th>Talk to TotalMix</th><td>The link on or off.</td></tr>
@@ -1238,6 +1243,14 @@ UF8 are bound to right now, <em>Install</em>, <em>Remove</em>, <em>Refresh</em>.
 <tr><th>Status</th><td>The link, as in the menu bar.</td></tr>
 <tr><th>Ask TotalMix again</th><td>Asks TotalMix for everything it knows, for example after you
 renamed channels.</td></tr>
+<tr><th>Profiles</th><td><em>Export…</em> saves the setup in one <code>.orcprofile</code> file: the
+pages UF1, UF8, Soft Keys and Colours, Sleep, MoreMe's studio name, logo and performers, and
+DynaMount's presets. <em>Import…</em> opens one and says which ORC made it and when.
+<em>Import and restart</em> replaces the current settings with it and starts ORC again; the settings
+before it are saved first, in the folder <code>profiles</code> next to ORC's files (<a href="#files">Files</a>).
+What belongs to this computer stays as it is: the TotalMix link (on or off, host, ports), MoreMe's
+switch, ports and PIN, Hue, OBS and the DynaMount stands. So there is no password in a profile, and
+one made on another computer works here too.</td></tr>
 <tr><th>Sleep when idle, After</th><td>Off out of the box. On, the UF1 and the UF8 go dark after this
 many minutes (1 to 99) without a touch. They keep running behind the dark panels, so they wake with
 the same picture. Whatever you touch first only wakes them: that key or that turn does nothing else.
@@ -1290,7 +1303,9 @@ encoder keeps the jog step.</td></tr>
 <tr><th>Keys</th><td>An action and the two lamp colours for QUICK 1-3, NORM, REC, AUTO, NAV, NUDGE
 and FOCUS, as for the UF1's transport keys.</td></tr>
 <tr><th>SEND/PLUG-IN</th><td>The output of each of the eight keys: a control-room role or any output
-TotalMix shows this remote. A role follows TotalMix, as on the pots.</td></tr>
+TotalMix shows this remote. A role follows TotalMix, as on the pots. <em>Active</em> and
+<em>Inactive</em> are the key's lamp colours: Active for the submix in play, Inactive for the other
+outputs, <em>Off</em> dark. A cued output stays yellow.</td></tr>
 </tbody></table>
 <h3 id="set-softkeys">Soft Keys</h3>
 <table class="data"><tbody>
@@ -1298,6 +1313,9 @@ TotalMix shows this remote. A role follows TotalMix, as on the pots.</td></tr>
 <tr><th>Half</th><td>Keys 1-4 or Keys 5-8 of that bank.</td></tr>
 <tr><th>Shows</th><td>Keys, TotalMix snapshots, TotalMix layouts, OBS scenes or TotalMix submixes.</td></tr>
 <tr><th>Name</th><td>The bank's name on the large screen.</td></tr>
+<tr><th>UF8 key active, UF8 key inactive</th><td>The colours of the bank's key on the UF8 (V-POT for
+bank 1, 1 to 5 for banks 2 to 6): while the bank is showing, and otherwise. <em>Off</em> leaves it
+dark.</td></tr>
 <tr><th>Label, Action</th><td>Per key: what the screen says and what a press does. An empty label
 takes the action's own. On a submix bank the Action menu is the key's output, and an empty label takes
 the output's name.</td></tr>
@@ -1306,7 +1324,7 @@ the output's name.</td></tr>
 <tr><th>Factory set for this bank</th><td>Puts this bank back the way it came.</td></tr>
 </tbody></table>
 <figure class="shot"><img src="shot:orc-settings-soft-keys" width="1600" height="810" loading="lazy"
-alt="The page Soft Keys: the ten banks in a list, and the four keys of bank 1 with label, action and lamp colours"></figure>
+alt="The page Soft Keys: the ten banks in a list, and bank 1 with the colours of its UF8 key and its four keys with label, action and lamp colours"></figure>
 <h3 id="set-colours">Colours</h3>
 <p>TotalMix has nine channel colours, the UF1 and the UF8 their own palette. This page says which
 colour each TotalMix colour shows as on both, and lists the channels that wear it.</p>
@@ -1438,6 +1456,8 @@ next to it the logo, if you picked one.</td></tr>
 by your user only.</td></tr>
 <tr><th><code>~/Library/Application Support/ORC/moreme-performers.json</code></th><td>The performers and the
 snapshots of the performers.</td></tr>
+<tr><th><code>~/Library/Application Support/ORC/profiles</code></th><td>The settings as they were
+before each profile import, one <code>.orcprofile</code> file each (<a href="#set-connection">Profiles</a>).</td></tr>
 <tr><th><code>/tmp/orc.log</code></th><td>ORC's log. Useful with a bug report.</td></tr>
 </tbody></table>
 <p>To start from scratch, quit ORC and remove the folder <code>~/Library/Application Support/ORC</code>.</p>

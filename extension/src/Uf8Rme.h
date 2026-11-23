@@ -165,6 +165,12 @@ void pickSubmix(const State& st, rmei::State& in, const Config& cfg, int key);
 // ⇨ SHIFT + THE KEY CUES ITS OUTPUT, the submix stays (Frank 03.11.2026). The
 // lamp turns yellow, SOLO's colour, its brightness still says the submix.
 bool submixKeyCued(const State& st, const Config& cfg, int key);
+// ⇨ THE KEY'S LAMP WITH ITS COLOUR (Frank 23.11.2026): both painters, ORC's and
+// Rea-Sixty's, take it from here. state 0 dark, 1 dim, 2 bright; rgb from
+// cfg.uf8SubmixLeds, Active for lamp 2 and Inactive for lamp 1. A cued key is
+// yellow at the submix's brightness (cue), whatever the colours say.
+struct KeyLed { int state = 0; std::uint32_t rgb = 0xFFFFFF; bool cue = false; };
+KeyLed submixKeyLed(const State& st, const rmei::State& in, const Config& cfg, int key);
 Writes cueKey(const State& st, const Config& cfg, int key);
 
 // The channel encoder: Main volume, as the UF1's jog (cfg.jogTarget, jogStepDb).

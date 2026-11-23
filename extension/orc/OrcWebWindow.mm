@@ -3,6 +3,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <WebKit/WebKit.h>
 
+#include "OrcProfile.h"
 #include "SettingsServer.h"
 
 #include <string>
@@ -58,6 +59,33 @@ void chooseLogoOnMain()
     if ([p runModal] != NSModalResponseOK || !p.URL) return;
     const std::string path = p.URL.path.UTF8String ?: "";
     set::server().post([path](set::Context& c) { set::logoChosen(path, c); });
+}
+
+// The profile's two dialogs (OrcProfile.h). The type is ORC's own extension; a
+// name typed without it gets it.
+UTType* profileType()
+{
+    return [UTType typeWithFilenameExtension:@(orc::profile::kExtension)] ?: UTTypeData;
+}
+
+void chooseProfileExportOnMain()
+{
+    NSSavePanel* p = [NSSavePanel savePanel];
+    p.allowedContentTypes = @[ profileType() ];
+    p.nameFieldStringValue = [NSString stringWithFormat:@"ORC.%s", orc::profile::kExtension];
+    if ([p runModal] != NSModalResponseOK || !p.URL) return;
+    const std::string path = p.URL.path.UTF8String ?: "";
+    set::server().post([path](set::Context& c) { set::profileExportChosen(path, c); });
+}
+
+void chooseProfileImportOnMain()
+{
+    NSOpenPanel* p = [NSOpenPanel openPanel];
+    p.allowedContentTypes = @[ profileType() ];
+    p.allowsMultipleSelection = NO;
+    if ([p runModal] != NSModalResponseOK || !p.URL) return;
+    const std::string path = p.URL.path.UTF8String ?: "";
+    set::server().post([path](set::Context& c) { set::profileImportChosen(path, c); });
 }
 
 // Cmd-C, V, X, A, Z in the page's fields. Without an Edit menu AppKit has nowhere
@@ -142,6 +170,8 @@ void installEditMenu()
         set::Host host;
         host.setLogin   = [](bool on) { dispatch_async(dispatch_get_main_queue(), ^{ setLoginOnMain(on); }); };
         host.chooseLogo = [] { dispatch_async(dispatch_get_main_queue(), ^{ chooseLogoOnMain(); }); };
+        host.chooseProfileExport = [] { dispatch_async(dispatch_get_main_queue(), ^{ chooseProfileExportOnMain(); }); };
+        host.chooseProfileImport = [] { dispatch_async(dispatch_get_main_queue(), ^{ chooseProfileImportOnMain(); }); };
         NSString* res = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"settings"];
         const std::string address = set::server().start(res.UTF8String ?: "", host);
         [self pushLogin];

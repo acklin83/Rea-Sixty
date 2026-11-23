@@ -1,0 +1,54 @@
+# Session 23.11.2026: ORC, Lampenfarben und Profile
+
+Auslöser: Daves Post #18 im RME-Forum (ORC-Thread, 5 Punkte). Frank: 1 gibt es schon
+(Namen kommen aus TotalMix), 2 und 3 bauen, 4 nicht machbar, stattdessen Export/Import
+für Profilwechsel (Antwort auf 5). Plan vorgelegt, Entscheide: Profil-Inhalt A, Sicherung
+vor dem Import ja, Endung `.orcprofile`.
+
+## Gebaut
+
+- **SEND/PLUG-IN-Farben:** `rme::KeyColours uf8SubmixLeds[8]` in `rme.json` (`uf8.submixLeds`,
+  RGB als Hex, Helligkeit 0/1/2). Ein Maler-Entscheid: `Uf8Rme::submixKeyLed`, benutzt von ORC
+  (`Uf8Surface::paintLeds_`) und Rea-Sixty (`main.cpp`, TotalMix-Side-Car). Cue bleibt gelb.
+  Einstellungen: Spalten Active/Inactive auf der Seite UF8.
+- **Bank-Tasten V-POT, 1-5:** `Config::rmeBankLed[10]` in `orc.json` (`rme_bank_leds`, nur
+  abweichende, nur vom Besitzer der RME-Bänke geschrieben). Rea-Sixty liest über
+  `applySideCarSourceLocked_`, Werkszustand über `restoreRmeSideCarBank`. Beide Maler
+  (`bankKeyLamp_` in ORC, `sideCarBankKeyLamp_` in Rea-Sixty). Einstellungen: „UF8 key
+  active/inactive“ im Kopf der Bank auf Soft Keys.
+- **Profile** (`orc/OrcProfile.*`): Export… / Import… auf General. JSON mit base64 pro Datei.
+  Inhalt: `orc.json`, `rme.json` ohne Verbindung, `moreme.json` nur Studio + Logo,
+  Performer, Logo, `dynamount_presets`, `dynamount_fill`. Bleibt lokal: TotalMix-Verbindung,
+  MoreMe-Schalter/Ports/PIN, Hue/OBS samt Schlüsseln, DynaMount-Geräte und -Positionen.
+  Import: prüfen, Rückfrage im Fenster, Kopie nach `profile-import.orcprofile`, ORC startet neu
+  (`requestRestart`, `relaunch` Mac/Windows), `applyStaged()` ganz am Anfang von `main()`,
+  vorher Sicherung nach `profiles/before-import-<Zeit>.orcprofile`. Danach öffnet ORC das
+  Fenster mit der Meldung.
+- `PhonesServer`: `parseSettings`/`settingsJson` freigelegt, damit der Import kein zweites
+  Format schreibt.
+- Handbuch (`orc/manual/template.html`): SEND/PLUG-IN, V-POT 1-5, Seite UF8, Soft Keys,
+  General/Profiles, Files. Bilder General und Soft Keys neu (offscreen WebKit, Demo-Daten,
+  Fenster 1280 auf 1600 skaliert, Ports nur in der Anzeige auf 7005/7006).
+
+## Entscheidungen
+
+- Import erst beim nächsten Start: `closeDown` schreibt `modes` und `rme.json` noch einmal,
+  ein Schreiben unter dem laufenden ORC würde überschrieben.
+- Was ein Profil nicht hat (Performer, DynaMount-Presets), wird beim Import geleert.
+- Sicherungsname englisch (`before-import-…`), ORC ist englisch; im Plan stand `vor-import`.
+
+## Gefunden beim Rendern
+
+- Der Kopf der Soft-Keys-Bank lief in Standardbreite über die Karte. `.skhead` schrumpft
+  jetzt Shows und Name (`minmax(120px,220px)`).
+- `orc_settings_demo` kann in einem frischen Scratch-HOME `rme.json` nicht schreiben
+  (`Library/Application Support` fehlt, `supportDir` legt nur den letzten Ordner an). Alt,
+  nur die Demo, nicht angefasst.
+
+## Offen
+
+- ORC in /Applications nicht getauscht (nur auf Franks Wort).
+- Windows: nur von CI gebaut, Dialoge und Neustart ungetestet am StoerPC.
+- Website `/orc` nimmt zwei ORC-Bilder; ob General/Soft Keys darunter sind, nicht geprüft
+  (Branch `website`).
+- Antwort an Dave im Forum.

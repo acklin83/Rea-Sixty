@@ -71,8 +71,6 @@ constexpr int kPages = 6;   // V-POT, 1-5
 constexpr std::uint8_t kQuick1 = 0x43, kQuick2 = 0x44, kQuick3 = 0x45;
 constexpr std::uint8_t kSelNorm = 0x70, kSelRec = 0x71, kSelAuto = 0x72;
 constexpr std::uint8_t kNav = 0x73, kNudge = 0x74, kFocus = 0x75;
-// On top of a lamp state in paintLeds_: this key's output is cued, its lamp yellow.
-constexpr int kLampCue = 10;
 struct UserKey { std::uint8_t id; uf8::Uf8GlobalLed led; };
 constexpr UserKey kUserKeys[Uf8Surface::kUserKeyCount] = {
     { kQuick1,  uf8::Uf8GlobalLed::Quick1 }, { kQuick2, uf8::Uf8GlobalLed::Quick2 },
@@ -335,50 +333,73 @@ void Uf8Surface::paintLeds_()
 {
     using G = uf8::Uf8GlobalLed;
     using S = uf8::GlobalLedState;
+    // A lamp: state 0 dark, 1 dim, 2 bright, and its colour: an RGB, kTable for
+    // the key's own table colour, kCue for the cue's yellow.
+    constexpr std::int64_t kTable = -1, kCue = -2;
+    struct Lamp { int state = 0; std::int64_t col = kTable; };
     const int mode = mode_.load();
-    int sp[8] = {};
+    Lamp sp[8], bk[6];
     u8s::PageLamps pl, bl;
     if (mode == static_cast<int>(Mode::TotalMix)) {
         const rme::State  st  = rme::manager().snapshot();
         const rme::Config cfg = rme::manager().config();
-        for (int k = 0; k < 8; ++k)
-            sp[k] = u8s::submixKeyLamp(st, in_, cfg, k) + (u8s::submixKeyCued(st, cfg, k) ? kLampCue : 0);
+        // SEND/PLUG-IN: the submix keys with their colours (Uf8Rme::submixKeyLed,
+        // shared with Rea-Sixty).
+        for (int k = 0; k < 8; ++k) {
+            const u8s::KeyLed l = u8s::submixKeyLed(st, in_, cfg, k);
+            sp[k] = { l.state, l.cue ? kCue : static_cast<std::int64_t>(l.rgb) };
+        }
         pl = u8s::pageLamps(st, in_, side_, cfg);
         bl = u8s::bankLamps(st, in_, side_);
     }
-    const struct { G led; int state; } want[] = {
-        { G::Layer1,   mode == 0 ? 2 : 1 },
-        { G::Layer2,   mode == 1 ? 2 : 1 },
-        { G::Layer3,   mode == 2 ? 2 : 1 },
-        { G::Flip,     flip_.load() ? 2 : 1 },
-        { G::Plugin,   side_.chanView.load() ? 2 : 1 },
-        { G::Fine,     fineHeld_.load() ? 2 : 1 },
-        { G::Pan,      mode != 0 ? 0 : side_.panOnPots.load() ? 2 : 1 },
+    // V-POT / 1-5: the bank's own colours (Frank 23.11.2026), Active for the
+    // bank showing, Inactive for another bank in use.
+    for (int b = 0; b < 6; ++b) {
+        const int lamp = bankKeyLamp_(b);
+        if (!lamp) continue;
+        const uf8::bindings::SubBankLed led = uf8::bindings::getRmeBankLed(b);
+        const bool on = (lamp == 2);
+        const uf8::bindings::Brightness bri = on ? led.brightness : led.inactiveBrightness;
+        const std::uint8_t* c = on ? led.color : led.inactiveColor;
+        bk[b] = { bri == uf8::bindings::Brightness::Bright ? 2 : bri == uf8::bindings::Brightness::Dim ? 1 : 0,
+                  (std::int64_t(c[0]) << 16) | (std::int64_t(c[1]) << 8) | std::int64_t(c[2]) };
+    }
+    const struct { G led; Lamp lamp; } want[] = {
+        { G::Layer1,   { mode == 0 ? 2 : 1 } },
+        { G::Layer2,   { mode == 1 ? 2 : 1 } },
+        { G::Layer3,   { mode == 2 ? 2 : 1 } },
+        { G::Flip,     { flip_.load() ? 2 : 1 } },
+        { G::Plugin,   { side_.chanView.load() ? 2 : 1 } },
+        { G::Fine,     { fineHeld_.load() ? 2 : 1 } },
+        { G::Pan,      { mode != 0 ? 0 : side_.panOnPots.load() ? 2 : 1 } },
         // 360: lit while the settings window it opens is showing.
-        { G::Btn360,   settingsShown_.load() ? 2 : 1 },
-        { G::VPotBank, bankKeyLamp_(0) },
-        { G::Soft1,    bankKeyLamp_(1) },
-        { G::Soft2,    bankKeyLamp_(2) },
-        { G::Soft3,    bankKeyLamp_(3) },
-        { G::Soft4,    bankKeyLamp_(4) },
-        { G::Soft5,    bankKeyLamp_(5) },
+        { G::Btn360,   { settingsShown_.load() ? 2 : 1 } },
+        { G::VPotBank, bk[0] },
+        { G::Soft1,    bk[1] },
+        { G::Soft2,    bk[2] },
+        { G::Soft3,    bk[3] },
+        { G::Soft4,    bk[4] },
+        { G::Soft5,    bk[5] },
         // SEND/PLUG-IN: the submix keys, in TotalMix only.
         { G::SendPlugin1, sp[0] }, { G::SendPlugin2, sp[1] },
         { G::SendPlugin3, sp[2] }, { G::SendPlugin4, sp[3] },
         { G::SendPlugin5, sp[4] }, { G::SendPlugin6, sp[5] },
         { G::SendPlugin7, sp[6] }, { G::SendPlugin8, sp[7] },
         // PAGE ◄ ►: lit where they lead somewhere (Uf8Rme::pageLamps).
-        { G::PageLeft,  pl.left ? 2 : 0 }, { G::PageRight, pl.right ? 2 : 0 },
-        { G::BankLeft,  bl.left ? 2 : 0 }, { G::BankRight, bl.right ? 2 : 0 },
+        { G::PageLeft,  { pl.left ? 2 : 0 } }, { G::PageRight, { pl.right ? 2 : 0 } },
+        { G::BankLeft,  { bl.left ? 2 : 0 } }, { G::BankRight, { bl.right ? 2 : 0 } },
     };
     static_assert(std::size(want) == std::tuple_size<decltype(cLed_)>::value);
     for (size_t i = 0; i < std::size(want); ++i) {
-        if (cLed_[i] == want[i].state) continue;
-        cLed_[i] = want[i].state;
-        const int lamp = want[i].state % kLampCue;
-        const S   s    = lamp == 2 ? S::Bright : lamp == 1 ? S::Dim : S::Off;
-        auto f = want[i].state >= kLampCue ? uf8::buildUf8GlobalLed(want[i].led, s, uf8::ledColourYellow())
-                                           : uf8::buildUf8GlobalLed(want[i].led, s);
+        const Lamp& l = want[i].lamp;
+        const std::int64_t key = (l.col + 3) * 4 + l.state;
+        if (cLed_[i] == key) continue;
+        cLed_[i] = key;
+        const S s = l.state == 2 ? S::Bright : l.state == 1 ? S::Dim : S::Off;
+        auto f = l.col == kCue   ? uf8::buildUf8GlobalLed(want[i].led, s, uf8::ledColourYellow())
+               : l.col == kTable ? uf8::buildUf8GlobalLed(want[i].led, s)
+               : uf8::buildUf8GlobalLed(want[i].led, s,
+                                        uf8::ledColourForTrackRgb(static_cast<std::uint32_t>(l.col)));
         if (!f.ff38.empty())   dev_.send(std::move(f.ff38));
         if (!f.ff39.empty())   dev_.send(std::move(f.ff39));
         if (!f.legacy.empty()) dev_.send(std::move(f.legacy));

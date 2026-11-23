@@ -64,6 +64,8 @@ class Surface {
     // 360 was pressed: the app opens the settings window on its main thread.
     // Set on the device thread, taken (and cleared) by the app's timer.
     bool takeSettingsRequest() { return settingsRequest_.exchange(false); }
+    // The window, once, as if 360 had been pressed (after an imported profile).
+    void requestSettings() { settingsRequest_.store(true); }
     // Whether that window is showing: the app's timer writes it, the 360 lamps
     // on both surfaces read it.
     void setSettingsShown(bool on) { settingsShown_.store(on); }

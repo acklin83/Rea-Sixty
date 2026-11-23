@@ -82,6 +82,19 @@ std::vector<StripPage> defaultStripPages();
 void upgradeStripPagesToV5(std::vector<StripPage>& pages);
 void upgradeStripPagesToV6(std::vector<StripPage>& pages);
 
+// A key's two lamp colours, as a soft key has them: RGB, and a brightness of
+// 0 off, 1 dim, 2 bright. Active is the key's thing in play, Inactive the rest.
+struct KeyColours {
+    std::uint32_t on     = 0xFFFFFF;
+    int           onBri  = 2;
+    std::uint32_t off    = 0xFFFFFF;
+    int           offBri = 1;
+    bool operator==(const KeyColours& o) const
+    {
+        return on == o.on && onBri == o.onBri && off == o.off && offBri == o.offBri;
+    }
+};
+
 struct Config {
     bool        enabled  = false;
     std::string host     = "127.0.0.1";
@@ -141,6 +154,12 @@ struct Config {
     static constexpr int kUf8SubmixKeys = 8;
     std::string uf8SubmixKeys[kUf8SubmixKeys] = { "phones1", "phones2", "phones3", "phones4",
                                                   "mainB",   "main",    "",        "" };
+    // ⇨ AND ONE COLOUR PAIR EACH (Frank 23.11.2026, forum: "selectable colors on
+    // the SEND/PLUGIN submix selection buttons", as the soft keys' submix banks
+    // have them). Active = the submix in play or its Link A/B partner, Inactive =
+    // another output. The factory is what the keys were before: white, bright
+    // and dim. The cue stays yellow over either. Rea-Sixty reads these too.
+    KeyColours uf8SubmixLeds[kUf8SubmixKeys];
     // ⇨ ORC's BRIGHTNESS (Frank 29.10.2026), the steps of Brightness.h, 0 dark ..
     // 4 full, for the UF1 and the UF8 alike, set by the brightness_* actions.
     // Rea-Sixty keeps its own in REAPER and does not read these.

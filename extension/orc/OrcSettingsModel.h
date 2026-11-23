@@ -20,6 +20,9 @@ namespace orc::settings {
 struct Host {
     std::function<void(bool on)> setLogin;     // open at login
     std::function<void()>        chooseLogo;   // the file dialog; logoChosen with the answer
+    // The profile's dialogs (OrcProfile.h): profileExportChosen, profileImportChosen.
+    std::function<void()>        chooseProfileExport;
+    std::function<void()>        chooseProfileImport;
 };
 
 struct Context {
@@ -30,6 +33,10 @@ struct Context {
     std::string error;                         // the page's error line
     std::string importResult;
     int         logoStamp      = 0;            // same file name, new picture
+    // Profiles: the last word on the card, and a checked file waiting for "Import
+    // and restart" (its path, "" for none).
+    std::string profileResult;
+    std::string profilePending;
     // Windows: the USB driver's card. A walk over the USB tree, so kept and refreshed
     // only now and then (stateJson).
     mutable std::string usbState;              // JSON
@@ -44,6 +51,8 @@ void apply(const std::string& json, Context& c);
 
 // The file dialog's answer.
 void logoChosen(const std::string& path, Context& c);
+void profileExportChosen(const std::string& path, Context& c);
+void profileImportChosen(const std::string& path, Context& c);
 
 // What a soft key or a transport key can run in ORC: the builtins in the RME and
 // Brightness categories, sorted by what the menu shows.

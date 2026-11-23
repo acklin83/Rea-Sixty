@@ -9,6 +9,7 @@
 #include "OrcConfig.h"
 #include "OrcMedia.h"
 #include "OrcModes.h"
+#include "OrcProfile.h"
 #include "Palette.h"
 #include "PhonesServer.h"
 #include "Protocol.h"
@@ -24,6 +25,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iterator>
 #include <vector>
 
@@ -274,6 +276,25 @@ void ledFromEntry(int entry, bool active, uint8_t (&rgb)[3], bnd::Brightness& br
     bri = active ? bnd::Brightness::Bright : bnd::Brightness::Dim;
 }
 
+// rme.json keeps a key's colours as RGB and 0 / 1 / 2 (rme::KeyColours); the
+// menus above speak the bindings' shape. One side of the pair each way.
+void keyColourOut(const rme::KeyColours& k, bool active, uint8_t (&rgb)[3], bnd::Brightness& bri)
+{
+    const std::uint32_t c = active ? k.on : k.off;
+    rgb[0] = static_cast<uint8_t>(c >> 16); rgb[1] = static_cast<uint8_t>(c >> 8);
+    rgb[2] = static_cast<uint8_t>(c);
+    const int b = active ? k.onBri : k.offBri;
+    bri = b >= 2 ? bnd::Brightness::Bright : b == 1 ? bnd::Brightness::Dim : bnd::Brightness::Off;
+}
+
+void keyColourIn(rme::KeyColours& k, bool active, const uint8_t (&rgb)[3], bnd::Brightness bri)
+{
+    const std::uint32_t c = (std::uint32_t(rgb[0]) << 16) | (std::uint32_t(rgb[1]) << 8) | rgb[2];
+    const int b = bri == bnd::Brightness::Bright ? 2 : bri == bnd::Brightness::Dim ? 1 : 0;
+    if (active) { k.on = c;  k.onBri = b; }
+    else        { k.off = c; k.offBri = b; }
+}
+
 std::string paletteJson()
 {
     std::string o = "[{\"i\":0,\"n\":\"Off\",\"c\":null}";
@@ -346,8 +367,12 @@ std::string softKeysJson(const rme::State& st, const std::vector<Choice>& outs, 
                      + ",\"action\":" + action + ",\"on\":" + on + ",\"off\":" + off + "}";
             });
         });
+        // The bank's own key on the UF8 (V-POT, 1-5), Frank 23.11.2026.
+        const bnd::SubBankLed led = bnd::getRmeBankLed(rel);
         return "{\"kind\":" + (ki < 0 ? std::string("null") : std::to_string(ki))
              + ",\"name\":" + jstr(bnd::getUf1SoftBankName(bank, 0))
+             + ",\"on\":" + ledSelected(led.color, led.brightness)
+             + ",\"off\":" + ledSelected(led.inactiveColor, led.inactiveBrightness)
              + ",\"halves\":" + halves + "}";
     });
 }
@@ -469,6 +494,14 @@ void applySoftKey(const std::string& t, const wdl_json_element* m)
     if (rel < 0 || rel >= bnd::kUf1RmeBankCount) return;
     const int bank = bnd::kUf1RmeBankBase + rel;
     if (t == "skFactory") { bnd::restoreRmeSideCarBank(rel); return; }
+    if (t == "skBankLed") {
+        bnd::SubBankLed led = bnd::getRmeBankLed(rel);
+        const int e = std::atoi(text(m, "v").c_str());
+        if (flag(m, "active")) ledFromEntry(e, true, led.color, led.brightness);
+        else                   ledFromEntry(e, false, led.inactiveColor, led.inactiveBrightness);
+        bnd::setRmeBankLed(rel, led);
+        return;
+    }
     if (t == "skKind") {
         const auto kind = kindFromIndex(std::atoi(text(m, "v").c_str()));
         // Leaving a submix bank takes its outputs along: on a plain bank a slot
@@ -699,6 +732,24 @@ std::vector<std::string> rmeActions()
     return out;
 }
 
+void profileExportChosen(const std::string& path, Context& c)
+{
+    std::string err;
+    c.profilePending.clear();
+    if (!orc::profile::exportTo(path, err)) { c.error = err; return; }
+    c.profileResult = "Saved " + std::filesystem::path(path).filename().string() + ".";
+}
+
+void profileImportChosen(const std::string& path, Context& c)
+{
+    orc::profile::Info info;
+    std::string err;
+    c.profilePending.clear();
+    if (!orc::profile::check(path, info, err)) { c.error = err; return; }
+    c.profilePending = path;
+    c.profileResult = "From ORC " + info.orc + (info.created.empty() ? std::string() : ", " + info.created) + ".";
+}
+
 void logoChosen(const std::string& path, Context& c)
 {
     std::string err;
@@ -793,6 +844,17 @@ void apply(const std::string& json, Context& c)
         if (i >= 0 && i < rme::Config::kUf8SubmixKeys)
             editRme(c, [&](rme::Config& x) { x.uf8SubmixKeys[i] = v; });
     }
+    else if (t == "submixLed") {
+        const int i = std::atoi(text(m, "i").c_str());
+        const bool active = flag(m, "active");
+        if (i >= 0 && i < rme::Config::kUf8SubmixKeys)
+            editRme(c, [&](rme::Config& x) {
+                uint8_t rgb[3]; bnd::Brightness bri;
+                keyColourOut(x.uf8SubmixLeds[i], active, rgb, bri);
+                ledFromEntry(std::atoi(v.c_str()), active, rgb, bri);
+                keyColourIn(x.uf8SubmixLeds[i], active, rgb, bri);
+            });
+    }
     else if (t == "colour") {
         const int i = std::atoi(text(m, "i").c_str());
         const int e = std::atoi(v.c_str());
@@ -807,6 +869,16 @@ void apply(const std::string& json, Context& c)
     else if (starts("dyna") || starts("preset")) applyDyna(t, m);
     else if (starts("hue"))  applyHue(t, m);
     else if (t == "chooseLogo") { if (c.host.chooseLogo) c.host.chooseLogo(); }
+    else if (t == "profileExport") { if (c.host.chooseProfileExport) c.host.chooseProfileExport(); }
+    else if (t == "profileImport") { if (c.host.chooseProfileImport) c.host.chooseProfileImport(); }
+    else if (t == "profileCancel") { c.profilePending.clear(); c.profileResult.clear(); }
+    else if (t == "profileApply" && !c.profilePending.empty()) {
+        std::string err;
+        if (!orc::profile::stage(c.profilePending, err)) { c.error = err; return; }
+        c.profilePending.clear();
+        c.profileResult = "ORC restarts with the profile.";
+        orc::requestRestart();
+    }
     else if (starts("mm"))   applyMoreme(t, m, c);
 }
 
@@ -843,7 +915,11 @@ std::string stateJson(const Context& c)
 #if defined(_WIN32)
        + ",\"usb\":" + usbJson(c)
 #endif
-       + "}";
+       + ",\"profile\":{\"result\":"
+       + jstr(c.profileResult.empty() ? orc::profile::lastApplied() : c.profileResult)
+       + ",\"pending\":" + jstr(c.profilePending.empty() ? std::string()
+                                 : std::filesystem::path(c.profilePending).filename().string())
+       + "}}";
 
     o += ",\"targets\":" + choicesJson(targets) + ",\"jogTargets\":" + choicesJson(jogs)
        + ",\"outputs\":" + choicesJson(outs);
@@ -871,6 +947,13 @@ std::string stateJson(const Context& c)
        + ",\"speed\":" + jstr(jnum(cfg.uf8PotSpeed))
        + ",\"submix\":" + indexed(rme::Config::kUf8SubmixKeys, [&](int i) {
              return specSelected(st, cfg.uf8SubmixKeys[i], outs);
+         })
+       + ",\"submixLed\":" + indexed(rme::Config::kUf8SubmixKeys, [&](int i) {
+             uint8_t rgb[3]; bnd::Brightness bri;
+             keyColourOut(cfg.uf8SubmixLeds[i], true, rgb, bri);
+             const std::string on = ledSelected(rgb, bri);
+             keyColourOut(cfg.uf8SubmixLeds[i], false, rgb, bri);
+             return "{\"on\":" + on + ",\"off\":" + ledSelected(rgb, bri) + "}";
          }) + "}";
 
     o += ",\"banks\":" + softKeysJson(st, outs, actions);

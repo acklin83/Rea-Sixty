@@ -2583,6 +2583,40 @@ void serializeUf1SoftBankNames_(const Config& c, std::ostringstream& os)
     os << "\n  ]";
 }
 
+// The UF8 lamps of the RME banks (Config::rmeBankLed). Only banks off the
+// factory (white, bright / dim) are written, and only by the program that owns
+// the RME banks (serializesUf1Bank_), so Rea-Sixty's file stays without them.
+bool rmeBankLedIsFactory_(const SubBankLed& a)
+{
+    const SubBankLed f{};
+    return std::equal(std::begin(a.color), std::end(a.color), std::begin(f.color))
+        && std::equal(std::begin(a.inactiveColor), std::end(a.inactiveColor), std::begin(f.inactiveColor))
+        && a.brightness == f.brightness && a.inactiveBrightness == f.inactiveBrightness;
+}
+
+void serializeRmeBankLeds_(const Config& c, std::ostringstream& os)
+{
+    bool any = false;
+    for (int r = 0; r < kUf1RmeBankCount && !any; ++r)
+        if (serializesUf1Bank_(kUf1RmeBankBase + r) && !rmeBankLedIsFactory_(c.rmeBankLed[r])) any = true;
+    if (!any) return;
+    os << ",\n  \"rme_bank_leds\": [";
+    bool first = true;
+    for (int r = 0; r < kUf1RmeBankCount; ++r) {
+        const SubBankLed& a = c.rmeBankLed[r];
+        if (!serializesUf1Bank_(kUf1RmeBankBase + r) || rmeBankLedIsFactory_(a)) continue;
+        if (!first) os << ",";
+        first = false;
+        os << "\n    {\"bank\": " << r
+           << ", \"color\": [" << int(a.color[0]) << ", " << int(a.color[1]) << ", " << int(a.color[2]) << "]"
+           << ", \"brightness\": \"" << brightnessName(a.brightness) << "\""
+           << ", \"inactive_color\": [" << int(a.inactiveColor[0]) << ", " << int(a.inactiveColor[1])
+           << ", " << int(a.inactiveColor[2]) << "]"
+           << ", \"inactive_brightness\": \"" << brightnessName(a.inactiveBrightness) << "\"}";
+    }
+    os << "\n  ]";
+}
+
 // The UF1's own jog modes (v58). Only slots that differ from a fresh one are
 // written, so a config that never touches them stays byte-identical.
 void serializeUf1JogUser_(const Config& c, std::ostringstream& os)
@@ -2629,6 +2663,7 @@ std::string serialize(const Config& c)
     serializeSoftKeySetNames_(c, os);
     serializeUf8SubBankNames_(c, os);
     serializeUf1SoftBankNames_(c, os);
+    serializeRmeBankLeds_(c, os);
     serializeUf1JogUser_(c, os);
     serializeCcPresets_(c, os);
     os << "\n}\n";
@@ -3216,6 +3251,35 @@ void parseUf1SoftBankNames_(wdl_json_element* root, Config& out)
     }
 }
 
+void parseRmeBankLeds_(wdl_json_element* root, Config& out)
+{
+    auto* arr = root->get_item_by_name("rme_bank_leds");
+    if (!arr || !arr->is_array() || !arr->m_array) return;
+    auto rgb = [](wdl_json_element* v, uint8_t (&dst)[3]) {
+        if (!v || !v->is_array() || !v->m_array) return;
+        for (int k = 0; k < 3 && k < v->m_array->GetSize(); ++k)
+            if (auto* s = v->enum_item(k)->get_string_value(true))
+                dst[k] = static_cast<uint8_t>(std::clamp(std::atoi(s), 0, 255));
+    };
+    const int n = arr->m_array->GetSize();
+    for (int i = 0; i < n; ++i) {
+        wdl_json_element* eo = arr->enum_item(i);
+        if (!eo || !eo->is_object()) continue;
+        int r = -1;
+        if (auto* v = eo->get_item_by_name("bank"))
+            if (auto* t = v->get_string_value(true)) r = std::atoi(t);
+        if (r < 0 || r >= kUf1RmeBankCount) continue;
+        SubBankLed& a = out.rmeBankLed[r];
+        a = SubBankLed{};
+        rgb(eo->get_item_by_name("color"), a.color);
+        rgb(eo->get_item_by_name("inactive_color"), a.inactiveColor);
+        if (auto* v = eo->get_item_by_name("brightness"))
+            a.brightness = brightnessFromName(v->get_string_value());
+        if (auto* v = eo->get_item_by_name("inactive_brightness"))
+            a.inactiveBrightness = brightnessFromName(v->get_string_value());
+    }
+}
+
 
 // The reader for serializeCcLayer_. Missing keys keep what `out` had (the factory
 // set), so a hand-edited file with half a page still loads.
@@ -3592,6 +3656,7 @@ bool tryParse_(const std::string& json, Config& out)
     parseSoftKeySetNames_(root, out);
     parseUf8SubBankNames_(root, out);
     parseUf1SoftBankNames_(root, out);
+    parseRmeBankLeds_(root, out);
     parseUf1JogUser_(root, out);
     parseCcPresets_(root, out);
     return true;
@@ -5303,6 +5368,7 @@ void applySideCarSourceLocked_()
                                                : DynamicBankKind::None;
             g_cfg.uf1SoftBankName[b][m] = f ? f->uf1SoftBankName[b][m] : std::string();
         }
+        g_cfg.rmeBankLed[r] = f ? f->rmeBankLed[r] : SubBankLed{};
     }
     g_scSrc.appliedGen = g_bindingsGen.fetch_add(1, std::memory_order_relaxed) + 1;
 }
@@ -5426,6 +5492,7 @@ void restoreRmeSideCarBank(int rel)
         g_cfg.uf1SoftBankDynamic[b][m] = fresh->uf1SoftBankDynamic[b][m];
         g_cfg.uf1SoftBankName[b][m]    = fresh->uf1SoftBankName[b][m];
     }
+    g_cfg.rmeBankLed[rel] = fresh->rmeBankLed[rel];
     persistLocked_();
 }
 
@@ -7197,6 +7264,21 @@ void setUf1SoftBankName(int bank, int mod, const std::string& name)
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     g_cfg.uf1SoftBankName[bank][mod] = name;
+    persistLocked_();
+}
+
+SubBankLed getRmeBankLed(int rel)
+{
+    if (rel < 0 || rel >= kUf1RmeBankCount) return SubBankLed{};
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return g_cfg.rmeBankLed[rel];
+}
+
+void setRmeBankLed(int rel, const SubBankLed& led)
+{
+    if (rel < 0 || rel >= kUf1RmeBankCount) return;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    g_cfg.rmeBankLed[rel] = led;
     persistLocked_();
 }
 

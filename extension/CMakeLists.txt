@@ -1354,6 +1354,7 @@ if(APPLE)
         # The settings as a page in ORC's window (docs/orc-settings-web-plan.md).
         orc/OrcSettingsModel.cpp
         orc/SettingsServer.cpp
+        orc/OrcProfile.cpp
         orc/OrcWebWindow.mm
         "${WDL_DIR}/WDL/sha.cpp"
         "${CMAKE_BINARY_DIR}/ORC.icns"
@@ -1522,7 +1523,7 @@ if(APPLE)
     # USB): MoreMe only on ports the test was given, at a fake TotalMix.
     set(ORC_SETTINGS_TEST_SOURCES
         orc/OrcSettingsModel.cpp orc/SettingsServer.cpp orc/OrcModes.cpp orc/OrcConfig.cpp
-        orc/PhonesServer.cpp orc/Phones.cpp orc/Performers.cpp orc/WebSocket.cpp
+        orc/OrcProfile.cpp orc/PhonesServer.cpp orc/Phones.cpp orc/Performers.cpp orc/WebSocket.cpp
         "${WDL_DIR}/WDL/sha.cpp" ${ORC_SHARED_SOURCES})
     add_executable(test_orc_settings tests/test_orc_settings.cpp ${ORC_SETTINGS_TEST_SOURCES})
     # A page to look at in a browser or offscreen: the same server on a scratch HOME.
@@ -1569,7 +1570,7 @@ if(WIN32 AND ORC_WINDOWS)
 
     set(ORC_SETTINGS_TEST_SOURCES
         orc/OrcSettingsModel.cpp orc/SettingsServer.cpp orc/OrcModes.cpp orc/OrcConfig.cpp
-        orc/PhonesServer.cpp orc/Phones.cpp orc/Performers.cpp orc/WebSocket.cpp src/WinUsbDriver.cpp
+        orc/OrcProfile.cpp orc/PhonesServer.cpp orc/Phones.cpp orc/Performers.cpp orc/WebSocket.cpp src/WinUsbDriver.cpp
         "${WDL_DIR}/WDL/sha.cpp" ${ORC_SHARED_SOURCES})
     add_executable(test_orc_settings tests/test_orc_settings.cpp ${ORC_SETTINGS_TEST_SOURCES})
     orc_windows_program(test_orc_settings)
@@ -1621,6 +1622,7 @@ if(WIN32 AND ORC_WINDOWS)
         orc/PhonesServer.cpp
         orc/OrcSettingsModel.cpp
         orc/SettingsServer.cpp
+        orc/OrcProfile.cpp
         "${WDL_DIR}/WDL/sha.cpp"
         ${ORC_SHARED_SOURCES})
     orc_windows_program(orc)

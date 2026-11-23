@@ -52,6 +52,7 @@
 #include "OrcConfig.h"
 #include "OrcFiles.h"
 #include "OrcModes.h"
+#include "OrcProfile.h"
 #include "ModeBuiltins.h"
 #include "OrcUi.h"
 #include "PhonesServer.h"
@@ -151,6 +152,10 @@ int main()
     struct TimerEnd { ~TimerEnd() { ::timeEndPeriod(1); } } timerEnd;
 #endif
 
+    // ⇨ AN IMPORTED PROFILE (OrcProfile.h), before any file is read.
+    if (const std::string r = orc::profile::applyStaged(); !r.empty())
+        orc::logLine("ORC: %s\n", r.c_str());
+
     // ⇨ ORC'S BINDINGS HOST. The engine is the extension's, unchanged and
     // unforked; what differs is the four answers. Two of them ORC does not have:
     // there is no REAPER to look a command id up in, and no window to type a key
@@ -224,9 +229,13 @@ int main()
     orc::Surface surface;
     g_surface = &surface;
     surface.start();
+    // Back from an imported profile: the settings window says how it went.
+    if (!orc::profile::lastApplied().empty()) surface.requestSettings();
 
     // The platform owns the main thread from here until the user quits.
-    orc::runApp(surface, [] { return g_interrupted.load(); }, [] { closeDown(); });
+    orc::runApp(surface, [] { return g_interrupted.load() || orc::restartRequested(); },
+                [] { closeDown(); });
     closeDown();
+    if (orc::restartRequested()) orc::relaunch();
     return 0;
 }

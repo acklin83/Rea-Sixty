@@ -598,6 +598,22 @@ bool submixKeyCued(const State& st, const Config& cfg, int key)
     return out >= 0 && st.cueChannel == out;
 }
 
+KeyLed submixKeyLed(const State& st, const rmei::State& in, const Config& cfg, int key)
+{
+    KeyLed k;
+    const int lamp = submixKeyLamp(st, in, cfg, key);
+    if (lamp <= 0) return k;
+    if (submixKeyCued(st, cfg, key)) {
+        k.state = lamp;
+        k.cue   = true;
+        return k;
+    }
+    const KeyColours& c = cfg.uf8SubmixLeds[key];
+    k.state = std::clamp(lamp == 2 ? c.onBri : c.offBri, 0, 2);
+    k.rgb   = lamp == 2 ? c.on : c.off;
+    return k;
+}
+
 Writes cueKey(const State& st, const Config& cfg, int key)
 {
     Writes out;

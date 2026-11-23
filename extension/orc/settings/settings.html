@@ -106,7 +106,7 @@ td select,td input[type=text],.pick{min-width:96px}
 .bk.on{background:var(--bg3);border-color:var(--accent)}
 .bk b{display:block;font-weight:700}
 .bk small{color:var(--fg2);font-size:12px}
-.skhead{display:grid;grid-template-columns:auto 220px 220px;justify-content:start;gap:12px;align-items:end;margin-bottom:12px}
+.skhead{display:grid;grid-template-columns:auto minmax(120px,220px) minmax(120px,220px) 112px 112px;justify-content:start;gap:12px;align-items:end;margin-bottom:12px}
 .skhead label{display:block;font-size:12px;color:var(--fg2)}.skhead label>*{margin-top:4px;font-size:14px;color:var(--fg)}
 .logo{width:56px;height:56px;border-radius:10px;flex:none;object-fit:contain}
 @media(max-width:820px){.split{grid-template-columns:minmax(0,1fr)}.skhead{grid-template-columns:minmax(0,1fr);justify-content:stretch}#bankList{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:2px}}
@@ -182,6 +182,9 @@ const DRAW={
     +'<div class="stack">'
     +card('Startup',rows([row('Open at login','<span'+(g.loginAvailable?'':' title="'+esc(g.loginHint)+'"')+'>'+onoff({t:'login'},g.loginOn,!g.loginAvailable)+'</span>')]))
     +card('Sleep',rows([row('Sleep when idle',onoff({t:'rme',f:'sleepEnabled'},g.sleepEnabled)),row('After',unit(rme('sleepMinutes',g.sleepMinutes,'class="num"'+(g.sleepEnabled?'':' disabled')),'minutes'))]))
+    +card('Profiles',(g.profile.pending
+        ?'<p class="note">'+esc(g.profile.pending)+'<br>'+esc(g.profile.result)+' Replaces the current settings and restarts ORC.</p><div class="acts"><button type="button" class="b"'+M({t:'profileApply'})+'>Import and restart</button><button type="button" class="b"'+M({t:'profileCancel'})+'>Cancel</button></div>'
+        :'<div class="acts"><button type="button" class="b"'+M({t:'profileExport'})+'>Export…</button><button type="button" class="b"'+M({t:'profileImport'})+'>Import…</button></div>'+(g.profile.result?'<p class="note">'+esc(g.profile.result)+'</p>':'')))
     +(g.usb?card('USB driver',rows(g.usb.devices.map(d=>row(d.n,status(d.s,d.ok))))+(g.usb.busy?'':usbAsk?'<p class="note">'+esc(usbAsk==='usbInstall'?'SSL 360 will no longer see the UF1 and the UF8.':'Removes the driver for every program that uses it.')+'</p><div class="acts"><button type="button" class="b"'+M({t:usbAsk})+'>'+(usbAsk==='usbInstall'?'Install':'Remove')+'</button><button type="button" class="b" data-usbno="1">Cancel</button></div>':'<div class="acts"><button type="button" class="b" data-usbask="usbInstall">Install</button><button type="button" class="b" data-usbask="usbRemove">Remove</button><button type="button" class="b"'+M({t:'usbRefresh'})+'>Refresh</button></div>')+(g.usb.msg?'<p class="note">'+esc(g.usb.msg)+'</p>':'')):'')
     +'</div></div>'},
   uf1(){const u=S.uf1;
@@ -194,7 +197,7 @@ const DRAW={
     +'</div>'},
   uf8(){const u=S.uf8;return '<div class="cards">'
     +card('UF8',rows([row('Use the UF8',onoff({t:'rme',f:'uf8Enabled'},u.use)),row('Show Main volume on change',onoff({t:'rme',f:'uf8ShowMainOnChange'},u.showMain)),row('V-Pot speed',unit(rme('uf8PotSpeed',u.speed,'class="num"'),'x'))]))
-    +card('SEND/PLUG-IN',table(['Key','Output'],u.submix.map((s,i)=>'<td class="k">'+(i+1)+'</td><td>'+outputSel({t:'submixKey',i},s)+'</td>')))
+    +card('SEND/PLUG-IN',table(['Key','Output','Active','Inactive'],u.submix.map((s,i)=>'<td class="k">'+(i+1)+'</td><td>'+outputSel({t:'submixKey',i},s)+'</td><td style="width:112px">'+colour({t:'submixLed',i,active:1},u.submixLed[i].on)+'</td><td style="width:112px">'+colour({t:'submixLed',i,active:0},u.submixLed[i].off)+'</td>')))
     +card('Keys',table(['Key','Action','Active','Inactive'],S.keys.map((k,i)=>[k,i]).slice(S.transportCount).map(x=>keyRow(x[0],x[1]))),true)
     +'</div>'},
   soft(){
@@ -208,7 +211,9 @@ const DRAW={
     return '<div class="split"><section class="card"><h2>Banks</h2><div id="bankList">'+list+'</div></section><section class="card"><h2>Bank '+(curBank+1)+'</h2><div class="skhead">'
       +'<label>Half<div><span class="seg" id="skHalf">'+['Keys 1-4','Keys 5-8'].map((t,i)=>'<button type="button" data-half="'+i+'" class="'+(i===half?'on':'')+'">'+t+'</button>').join('')+'</span></div></label>'
       +'<label>Shows'+sel({t:'skKind',b:curBank},KINDS.map((k,i)=>'<option value="'+i+'"'+(i===b.kind?' selected':'')+'>'+k+'</option>').join(''),b.kind)+'</label>'
-      +'<label>Name'+field({t:'skName',b:curBank},b.name)+'</label></div>'
+      +'<label>Name'+field({t:'skName',b:curBank},b.name)+'</label>'
+      +'<label>UF8 key active<div>'+colour({t:'skBankLed',b:curBank,active:1},b.on)+'</div></label>'
+      +'<label>UF8 key inactive<div>'+colour({t:'skBankLed',b:curBank,active:0},b.off)+'</div></label></div>'
       +table(['Key','Label',sub?'Output':'Action','Active','Inactive'],keys)
       +'<div class="acts mt"><button type="button" class="b"'+M({t:'skFactory',b:curBank})+'>Factory set for this bank</button></div></section></div>'},
   colours(){return '<div class="cards">'+card('Colours',table(['TotalMix','UF1','Channels'],S.colours.map((c,i)=>'<td class="k">'+esc(c.n)+'</td><td style="width:200px">'+colour({t:'colour',i},c.v)+'</td><td data-live class="dimtext">'+esc(c.w)+'</td>')),true)+'</div>'},

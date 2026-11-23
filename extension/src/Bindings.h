@@ -1041,6 +1041,12 @@ struct Config {
     // Empty is the normal state and NOT a hole: a dynamic bank then announces its
     // own kind and a static one its number (uf1BankDisplayName_ in main.cpp).
     std::string     uf1SoftBankName[kUf1SoftBankStore][kSoftKeyModifierSets];
+    // ⇨ THE LAMP OF AN RME BANK'S KEY ON THE UF8 (V-POT, 1-5), Frank 23.11.2026,
+    // forum: "assign colors to the 6 SOFT KEY SELECTION buttons". Active = the
+    // bank showing, Inactive = another bank in use. One per bank, both halves.
+    // ORC writes it to orc.json, Rea-Sixty reads it (applySideCarSourceLocked_).
+    // isSet is not used here. The factory is white, bright and dim.
+    SubBankLed      rmeBankLed[kUf1RmeBankCount];
     // The UF1's own jog modes: name, kind and divider per slot (v58). The two
     // turn bindings per slot are ordinary layer entries, resolved like any key.
     Uf1JogUserMode  uf1JogUser[kUf1JogUserModes];
@@ -1690,6 +1696,9 @@ void            setSubBankName(int layer, int quick, int sub, int mod,
                                const std::string& name);
 std::string     getUf1SoftBankName(int bank, int mod);
 void            setUf1SoftBankName(int bank, int mod, const std::string& name);
+// The UF8 lamp of RME bank `rel` (0..kUf1RmeBankCount-1), Config::rmeBankLed.
+SubBankLed      getRmeBankLed(int rel);
+void            setRmeBankLed(int rel, const SubBankLed& led);
 // Does THAT SET of this bank hold anything? The UF1 twin of
 // subBankSetHasContent, and narrow in the same way: it answers for the one set,
 // not for the whole Binding, which is the question "does copying Plain take

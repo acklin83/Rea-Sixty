@@ -85,7 +85,11 @@ bool validPort(int p) { return p > 0 && p <= 65535; }
 
 bool loadSettings(Settings& out)
 {
-    const std::string json = orc_handover::readFile(settingsPath());
+    return parseSettings(orc_handover::readFile(settingsPath()), out);
+}
+
+bool parseSettings(const std::string& json, Settings& out)
+{
     if (json.empty()) return false;
     wdl_json_parser p;
     const wdl_json_element* root = p.parse(json.c_str(), static_cast<int>(json.size()));
@@ -116,14 +120,18 @@ bool loadSettings(Settings& out)
 
 bool saveSettings(const Settings& s)
 {
-    const std::string json = std::string("{\n  \"version\": 1,\n")
+    return orc_handover::writeFile(settingsPath(), settingsJson(s));
+}
+
+std::string settingsJson(const Settings& s)
+{
+    return std::string("{\n  \"version\": 1,\n")
         + "  \"enabled\": " + (s.enabled ? "true" : "false") + ",\n"
         + "  \"webPort\": " + std::to_string(s.webPort) + ",\n"
         + "  \"sendPort\": " + std::to_string(s.sendPort) + ",\n"
         + "  \"recvPort\": " + std::to_string(s.recvPort) + ",\n"
         + "  \"studio\": " + jsonStr(s.studio) + ",\n"
         + "  \"logo\": " + jsonStr(s.logo) + "\n}\n";
-    return orc_handover::writeFile(settingsPath(), json);
 }
 
 std::string loadPin()

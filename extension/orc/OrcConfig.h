@@ -34,6 +34,11 @@ std::string resourcesDir();
 // This build's version, "?" where the build did not say (tests).
 std::string version();
 
+// ⇨ QUIT AND START AGAIN (an imported profile, OrcProfile.h): the main loop sees
+// it as it sees Ctrl-C, closes down, and main() calls relaunch (OrcUi.h).
+void requestRestart();
+bool restartRequested();
+
 // From the system's own generator.
 void randomBytes(void* out, std::size_t n);
 unsigned randomBelow(unsigned n);

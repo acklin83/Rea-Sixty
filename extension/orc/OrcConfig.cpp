@@ -1,5 +1,7 @@
 #include "OrcConfig.h"
 
+#include <atomic>
+
 #include "RmeManager.h"
 #include "OrcFiles.h"
 #include "OrcHandover.h"
@@ -50,6 +52,10 @@ std::string resourcesDir()
     return p + "/Resources";
 #endif
 }
+
+namespace { std::atomic<bool> g_restart{false}; }
+void requestRestart() { g_restart.store(true); }
+bool restartRequested() { return g_restart.load(); }
 
 std::string version()
 {

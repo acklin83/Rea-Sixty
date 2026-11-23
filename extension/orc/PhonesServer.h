@@ -41,6 +41,10 @@ struct Settings {
 
 bool        loadSettings(Settings& out);   // false: no file yet (defaults stay)
 bool        saveSettings(const Settings& s);
+// The file's text both ways, for anyone who holds one that is not on disk yet
+// (an ORC profile, OrcProfile.h).
+bool        parseSettings(const std::string& json, Settings& out);
+std::string settingsJson(const Settings& s);
 std::string settingsPath();
 std::string loadPin();                     // "" = none yet
 bool        savePin(const std::string& pin);
