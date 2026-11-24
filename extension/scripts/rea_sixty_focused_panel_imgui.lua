@@ -1119,10 +1119,28 @@ local function drawContextMenu()
     end
   end
 
+  -- Lock position / size: only a floating panel can be dragged or resized by
+  -- accident, a docked one belongs to the docker. Greyed out while docked, the
+  -- ticks stay as they are for the next time it floats (Frank 2026-11-24).
   reaper.ImGui_Separator(ctx)
-  reaper.ImGui_BeginDisabled(ctx)
-  reaper.ImGui_MenuItem(ctx, "Drag the box anywhere to move it")
-  reaper.ImGui_EndDisabled(ctx)
+  local docked = has_dock and cur_dock < 0
+  local lockPos  = reaper.GetExtState(SECT, "focused_panel_lock_pos")  == "1"
+  local lockSize = reaper.GetExtState(SECT, "focused_panel_lock_size") == "1"
+  if docked then reaper.ImGui_BeginDisabled(ctx) end
+  if reaper.ImGui_MenuItem(ctx, "Lock position", nil, lockPos) then
+    toggleKey("focused_panel_lock_pos", false)
+  end
+  if reaper.ImGui_MenuItem(ctx, "Lock size", nil, lockSize) then
+    toggleKey("focused_panel_lock_size", false)
+  end
+  if docked then reaper.ImGui_EndDisabled(ctx) end
+
+  if not lockPos and not docked then
+    reaper.ImGui_Separator(ctx)
+    reaper.ImGui_BeginDisabled(ctx)
+    reaper.ImGui_MenuItem(ctx, "Drag the box anywhere to move it")
+    reaper.ImGui_EndDisabled(ctx)
+  end
 
   reaper.ImGui_Separator(ctx)
   local startOn = startupEnabled()
@@ -1219,6 +1237,17 @@ local function loop()
 
   local docked = has_dock and cur_dock < 0
   local wflags = docked and BASE_FLAGS or (BASE_FLAGS | FLOAT_FLAGS)
+  -- Lock position / size from the right-click menu, floating only. The saved
+  -- rect is still restored on the first frame: SetNextWindowPos/Size are not
+  -- blocked by NoMove/NoResize, only the mouse is.
+  if not docked then
+    if reaper.GetExtState(SECT, "focused_panel_lock_pos") == "1" then
+      wflags = wflags | reaper.ImGui_WindowFlags_NoMove()
+    end
+    if reaper.GetExtState(SECT, "focused_panel_lock_size") == "1" then
+      wflags = wflags | reaper.ImGui_WindowFlags_NoResize()
+    end
+  end
 
   local bg = math.floor(num("focused_panel_bg",     0x1C1C1F)) & 0xFFFFFF
   local bd = math.floor(num("focused_panel_border", 0x3A3D44)) & 0xFFFFFF
