@@ -802,6 +802,35 @@ int main()
         check(!parseNames("<General/>", none), "no names, no parse");
     }
 
+    // ── which state file: the device TotalMix shows (forum, 24.11.2026) ──────
+    // rme.totalmix.default.xml line 331 on Frank's Mac, 2026-11-25.
+    {
+        check(stateFileKey("Fireface UFX+ (23802132)") == "FirefaceUFX+23802132",
+              "the device name without spaces and brackets is the file's");
+        check(stateFileKey("Fireface UFX III (12345678)") == "FirefaceUFXIII12345678",
+              "a UFX III's name as its file has it (forum)");
+        const std::string def =
+            "\t<Default0>\n\t\t<Cache0>\n"
+            "\t\t\t<val e=\"TwoRowLower\" v=\"0\"/>\n"
+            "\t\t\t<val e=\"DeviceName\" v=\"Fireface UFX III (12345678)\"/>\n"
+            "\t\t</Cache0>\n\t</Default0>\n";
+        check(shownDevice(def) == "Fireface UFX III (12345678)", "DeviceName read");
+        check(shownDevice("<Default0/>").empty(), "no DeviceName, no device");
+        // Two UFX III after a warranty swap, the old one's file written last.
+        const std::vector<StateFile> two = {
+            { "last.FirefaceUFXIII12345678.xml", 100 },
+            { "last.FirefaceUFXIII87654321.xml", 200 },
+            { "last.Fireface80098765.xml", 50 },
+        };
+        check(pickStateFile(two, "Fireface UFX III (12345678)") == "last.FirefaceUFXIII12345678.xml",
+              "the shown device's file wins over a newer one");
+        check(pickStateFile(two, "") == "last.FirefaceUFXIII87654321.xml",
+              "without a device name: the newest, as before");
+        check(pickStateFile(two, "Babyface Pro (1)") == "last.FirefaceUFXIII87654321.xml",
+              "a device without a file: the newest");
+        check(pickStateFile({}, "Fireface UFX III (12345678)").empty(), "no files, nothing");
+    }
+
         // ⛔ Band 1 and band 3 do not share indices 2 and 3. Frank measured both at
     // the mixer on 2026-09-25 after the surface offered a high-pass and set a
     // low-pass: index 2 is "the pass filter of this band", and the bands sit at

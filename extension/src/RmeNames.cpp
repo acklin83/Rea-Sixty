@@ -6,6 +6,7 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 #include "OrcFiles.h"
 
@@ -139,6 +140,35 @@ std::string layoutName(const Names& n, int i)
     return n.layout[i].empty() ? fallback("Layout", i) : n.layout[i];
 }
 
+std::string stateFileKey(const std::string& deviceName)
+{
+    std::string k;
+    for (const char ch : deviceName)
+        if (ch != ' ' && ch != '(' && ch != ')') k.push_back(ch);
+    return k;
+}
+
+std::string shownDevice(const std::string& defaultXml)
+{
+    std::string v;
+    return findVal(defaultXml, "DeviceName", v) ? v : std::string();
+}
+
+std::string pickStateFile(const std::vector<StateFile>& files, const std::string& device)
+{
+    const std::string key = stateFileKey(device);
+    if (!key.empty()) {
+        const std::string want = "last." + key + ".xml";
+        for (const auto& f : files)
+            if (f.name == want) return f.name;
+    }
+    std::string best;
+    long long bestT = -1;
+    for (const auto& f : files)
+        if (f.mtime > bestT) { bestT = f.mtime; best = f.name; }
+    return best;
+}
+
 const Names& namesFromDisk()
 {
     static Names s_names;
@@ -152,22 +182,35 @@ const Names& namesFromDisk()
 
     const std::string dir = orc_files::totalMixFolder();
     if (dir.empty()) return s_names;
-    // The newest last.*.xml: one per device TotalMix has seen, and the one it
-    // wrote last belongs to the device that is running (Frank 22.09.).
-    std::string best;
-    long long   bestT = -1;
+    // One last.*.xml per device TotalMix has seen. The one of the device its
+    // window shows (pickStateFile); the newest only when that cannot be told.
+    std::vector<StateFile> files;
     std::error_code ec;
     for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
         const std::string nm = it->path().filename().string();
         if (nm.size() < 9 || nm.compare(0, 5, "last.") != 0
             || nm.compare(nm.size() - 4, 4, ".xml") != 0)
             continue;
-        const std::string p = dir + "/" + nm;
         long long t = 0, size = 0;
-        if (!orc_files::fileStamp(p, t, size)) continue;
-        if (t > bestT) { bestT = t; best = p; }
+        if (!orc_files::fileStamp(dir + "/" + nm, t, size)) continue;
+        files.push_back({ nm, t });
     }
-    if (best.empty() || (best == s_path && bestT == s_mtime)) return s_names;
+    std::string device;
+    {
+        std::ifstream d(dir + "/rme.totalmix.default.xml", std::ios::binary);
+        if (d) {
+            std::stringstream ds;
+            ds << d.rdbuf();
+            device = shownDevice(ds.str());
+        }
+    }
+    const std::string pick = pickStateFile(files, device);
+    if (pick.empty()) return s_names;
+    const std::string best = dir + "/" + pick;
+    long long bestT = -1;
+    for (const auto& f : files)
+        if (f.name == pick) bestT = f.mtime;
+    if (best == s_path && bestT == s_mtime) return s_names;
     s_path  = best;
     s_mtime = bestT;
     std::ifstream f(best, std::ios::binary);

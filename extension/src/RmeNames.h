@@ -18,10 +18,12 @@
 //  · WHEN TotalMix rewrites the file is not known. A rename in TotalMix shows up
 //    here once the file changes on disk, not the moment it is typed.
 //
-// Windows and Linux: no path known, so no names; the banks fall back to
+// Windows: %LOCALAPPDATA%\TotalMixFX (orc_files::totalMixFolder, read on the
+// StoerPC). Linux: no TotalMix, so no names; the banks fall back to
 // "Snapshot n" / "Layout n" rather than guessing a folder.
 //
 #include <string>
+#include <vector>
 
 namespace reasixty::rme {
 
@@ -44,9 +46,25 @@ std::string toUtf8(const std::string& s);
 std::string snapshotName(const Names& n, int i);
 std::string layoutName(const Names& n, int i);
 
-// The newest last.*.xml in TotalMix' folder, re-read only when its path or
-// modification time changed. Cheap to call often: the check itself is
-// rate-limited to once every two seconds. Main thread.
+// ⇨ WHICH last.*.xml (Frank 25.11.2026, forum: a second UFX III after a warranty
+// swap left two files, TotalMix kept writing both, and the newest was the old
+// unit's, so ORC showed "Layout 1" and "Mix 1"). TotalMix names the device its
+// window shows in rme.totalmix.default.xml, <val e="DeviceName" v="Fireface UFX+
+// (23802132)"/>, and that name without spaces and brackets is the file's:
+// last.FirefaceUFX+23802132.xml (Frank's Mac, read 25.11.2026). The newest file
+// stays the fallback, for a folder without that entry or without that file.
+// Pure, for the test:
+//   stateFileKey  "Fireface UFX+ (23802132)" -> "FirefaceUFX+23802132"
+//   shownDevice   the first DeviceName in the text of rme.totalmix.default.xml, or ""
+//   pickStateFile the shown device's file when it is among `files`, else the newest
+std::string stateFileKey(const std::string& deviceName);
+std::string shownDevice(const std::string& defaultXml);
+struct StateFile { std::string name; long long mtime = 0; };
+std::string pickStateFile(const std::vector<StateFile>& files, const std::string& device);
+
+// The state file of the device TotalMix shows (pickStateFile), re-read only when
+// its path or modification time changed. Cheap to call often: the check itself
+// is rate-limited to once every two seconds. Main thread.
 const Names& namesFromDisk();
 
 }  // namespace reasixty::rme

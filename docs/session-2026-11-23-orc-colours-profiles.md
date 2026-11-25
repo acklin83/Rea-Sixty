@@ -63,3 +63,14 @@ vor dem Import ja, Endung `.orcprofile`.
 - Website-Deploy auf den VPS sperrte der Auto-Modus: Frank deployt.
 - Forenantwort an Dave als Entwurf an Frank, nicht gepostet.
 - Die ORC-Seite der Website bindet keine `docs/screenshots` mehr ein (offener Punkt oben erledigt).
+
+## 25.11.2026: Namen aus der Datei des gezeigten Geräts
+
+- Forum #20 (Dave): zwei `last.FirefaceUFXIII<Serie>.xml` nach Garantietausch, TotalMix schreibt
+  laut ihm beide, ORC nahm die jüngste = alte, unbenannte Datei ("Layout 1-6", "Mix 1-8").
+- Fund an Franks Mac: `rme.totalmix.default.xml`, `Default0/Cache0`, `DeviceName` =
+  "Fireface UFX+ (23802132)", ohne Leerzeichen und Klammern = Dateiname.
+- `RmeNames`: `stateFileKey`, `shownDevice`, `pickStateFile` (rein, Tests in test_rme_osc);
+  `namesFromDisk` nimmt die Datei des gezeigten Geräts, sonst wie bisher die jüngste.
+- Ungeprüft: Daves default.xml, mehrere Fenster (`Default1`…), Windows-Aufbau. Frage an Dave in
+  der Forenantwort.
