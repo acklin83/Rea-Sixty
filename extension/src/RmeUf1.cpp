@@ -1,6 +1,11 @@
 #include "RmeUf1.h"
 
+#include "LogPath.h"
+
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <ctime>
 #include <cstdlib>
 #include <functional>
 
@@ -331,6 +336,33 @@ std::string panAddress(Row r, int ch, int submix)
     if (submix < 0) return {};
     return std::string("/mix/") + (r == Row::Input ? "in/" : "pb/") + std::to_string(ch)
          + "/" + std::to_string(submix) + "/balpan";
+}
+
+double panTurn(double cur, int delta, double scale, bool width)
+{
+    const double lo = width ? 0.0 : -1.0;
+    double nv = cur + delta * 0.02 * (scale > 0.0 ? scale : 1.0);
+    nv = std::round(nv * 100.0) / 100.0;
+    // A value TotalMix calls centre (the readout's C) leaves it freely; one on a
+    // side stops on C before it goes over.
+    const bool onSide = std::abs(cur) >= 0.005;
+    if (!width && onSide && ((cur > 0.0 && nv < 0.0) || (cur < 0.0 && nv > 0.0))) nv = 0.0;
+    if (std::abs(nv) < 1e-9) nv = 0.0;
+    return std::clamp(nv, lo, 1.0);
+}
+
+void logOutputPan(const std::string& address, double from, double to, const char* source)
+{
+    if (address.rfind("/output/", 0) != 0) return;
+    if (address.size() < 7 || address.compare(address.size() - 7, 7, "/balpan") != 0) return;
+    if (FILE* f = std::fopen(uf8::logPath("rme_pan.log").c_str(), "a")) {
+        const std::time_t now = std::time(nullptr);
+        char when[32];
+        std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+        std::fprintf(f, "%s %s %+.3f -> %+.3f  %s\n", when, address.c_str(), from, to,
+                     source ? source : "?");
+        std::fclose(f);
+    }
 }
 
 double panValue(const State& st, Row r, int ch, int submix, bool& known)

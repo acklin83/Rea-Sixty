@@ -74,3 +74,15 @@ vor dem Import ja, Endung `.orcprofile`.
   `namesFromDisk` nimmt die Datei des gezeigten Geräts, sonst wie bisher die jüngste.
 - Ungeprüft: Daves default.xml, mehrere Fenster (`Default1`…), Windows-Aufbau. Frage an Dave in
   der Forenantwort.
+
+## 25.11.2026: Pan der Ausgänge
+
+- Frank: Pan der Control-Room-Ausgänge oft verschoben (Phones 2 R3, Phones 3 R1, Main R1), und
+  von Hand kein C, nur L1/R1. Ursache C: ein Schritt = 2 % mal V-Pot-Speed, Franks UF8 auf 0.75
+  = 1,5 %, ungerundet; −0,005 zeigt schon L1. Ursache Verschieben: kein Schreiber ohne Hand im
+  Code, Werte passen zu einzelnen 1,5-%-Schritten (gestreifter V-Pot vermutet, nicht belegt).
+- `rmeu::panTurn`: ganze Prozent, Mitte rastet beim Überqueren; Breite ohne Mitte. Benutzt vom
+  UF1-Pot über dem Fader, den UF8-V-Pots und der Kanalseite (`RmeStrip::nudge`).
+- `rmeu::logOutputPan` → `/tmp/rme_pan.log`: jede Änderung an `/output/<n>/balpan` mit Quelle,
+  auch Pushes. Nur Diagnose.
+- Nicht gebaut: Schutz gegen gestreifte V-Pots (genannt, Frank entscheidet).

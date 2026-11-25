@@ -404,11 +404,15 @@ Writes vpot(const State& st, const rmei::State& in, Side& u, const Config& cfg,
     if (a.empty()) return out;
     bool known = false;
     const double cur = rmeu::panValue(st, rs, ch, sub, known);
-    // 2 % per count, as the UF1's pot above the fader. On the FX row the pot is
-    // the width, 0 mono .. 1 stereo.
-    const double lo = rmeu::panIsWidth(rs) ? 0.0 : -1.0;
-    const double nv = std::clamp(cur + delta * 0.02 * scale, lo, 1.0);
-    if (nv != cur) out.push_back({ a, static_cast<float>(nv) });
+    // As the UF1's pot above the fader (panTurn). On the FX row the pot is the
+    // width, 0 mono .. 1 stereo.
+    const double nv = rmeu::panTurn(cur, delta, scale, rmeu::panIsWidth(rs));
+    if (nv != cur) {
+        char src[32];
+        std::snprintf(src, sizeof(src), "UF8 V-Pot %d", strip + 1);
+        rmeu::logOutputPan(a, cur, nv, src);
+        out.push_back({ a, static_cast<float>(nv) });
+    }
     return out;
 }
 
@@ -441,7 +445,13 @@ Writes vpotPush(const State& st, const rmei::State& in, Side& u, const Config& c
     }
     const int sub = rmeu::effectiveSubmix(st, in.submix.load());
     const std::string a = rmeu::panAddress(rs, ch, sub);
-    if (!a.empty()) out.push_back({ a, rmeu::panIsWidth(rs) ? 1.0f : 0.0f });
+    if (!a.empty()) {
+        bool known = false;
+        char src[40];
+        std::snprintf(src, sizeof(src), "UF8 V-Pot %d, push", strip + 1);
+        rmeu::logOutputPan(a, rmeu::panValue(st, rs, ch, sub, known), 0.0, src);
+        out.push_back({ a, rmeu::panIsWidth(rs) ? 1.0f : 0.0f });
+    }
     return out;
 }
 

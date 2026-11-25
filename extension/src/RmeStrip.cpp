@@ -437,6 +437,14 @@ Writes nudge(const State& st, Row r, int ch, const Param& p, int detents, double
     // Fine scales a continuous step; a list entry is a list entry.
     const double step = stepsWhole(p) ? p.step : p.step * (scale > 0.0 ? scale : 1.0);
     double nv;
+    if (p.kind == Kind::Pan) {
+        // The pan's own step: whole percent, and C on the way over (panTurn).
+        nv = clampTo(p, r, uf1::panTurn(v, detents, scale, false));
+        if (nv == v) return {};
+        const Writes w = writesFor(st, r, ch, p, nv);
+        for (const auto& x : w) uf1::logOutputPan(x.first, v, nv, "channel page");
+        return w;
+    }
     if (p.kind == Kind::Hz)
         nv = std::max(v, p.lo) * std::pow(2.0, detents * (step / p.step) / 12.0);  // 1/12 oct
     else
@@ -481,8 +489,12 @@ Writes resetWrites(const State& st, Row r, int ch, const Param& p)
     else if (p.kind == Kind::Pan)                        def = 0.0;
     else return {};
     double v = 0.0;
-    if (value(st, r, ch, p, v) && v == def) return {};
-    return writesFor(st, r, ch, p, def);
+    const bool known = value(st, r, ch, p, v);
+    if (known && v == def) return {};
+    const Writes w = writesFor(st, r, ch, p, def);
+    if (p.kind == Kind::Pan)
+        for (const auto& x : w) uf1::logOutputPan(x.first, v, def, "channel page, push");
+    return w;
 }
 
 Writes press(const State& st, Row r, int ch, const Param& p)

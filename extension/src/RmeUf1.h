@@ -177,6 +177,20 @@ std::string panAddress(Row r, int ch, int submix);
 double      panValue(const State& st, Row r, int ch, int submix, bool& known);
 inline bool panIsWidth(Row r) { return r == Row::Fx; }
 
+// ⇨ ONE PAN STEP FOR EVERY POT (Frank 25.11.2026: "kann den Pot nicht genau auf C
+// verschieben, geht von L1 auf R1"). A count is 2 % times the pot's speed, so at
+// a speed of 0.75 it was 1.5 % and the value never met 0 again. Now the result
+// lands on whole percent, and a pan that crosses the centre stops on C first.
+// The width (`width`, FX row) gets whole percent and no centre. The UF1's pot
+// above the fader, the UF8's V-Pots and the channel pages (RmeStrip) use it.
+double panTurn(double cur, int delta, double scale, bool width);
+
+// ⇨ A LINE IN <log dir>/rme_pan.log FOR EVERY WRITE TO AN OUTPUT'S PAN (Frank
+// 25.11.2026: Phones and Main moved off the centre with nobody turning them).
+// Who wrote it (`source`), from what to what. Only /output/<n>/balpan; a mix pan
+// is not logged. Diagnosis only, it changes nothing.
+void logOutputPan(const std::string& address, double from, double to, const char* source);
+
 // Name and palette colour of a channel, "" / -1 when unknown.
 const Channel* channelOf(const State& st, Row r, int ch);
 

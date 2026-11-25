@@ -375,6 +375,7 @@ writes: <code>&gt; Main</code> for an input or a playback (the <a href="#rows">s
 <tr><td>Output</td><td>The output's own pan</td><td>Centre</td></tr>
 <tr><td>FX</td><td>Width, 0 (mono) to 1 (stereo)</td><td>Full stereo</td></tr>
 </tbody></table>
+<p>A pan moves in whole percent and stops on the centre on its way to the other side.</p>
 </div>
 
 <div class="ctl" id="c-fader">
@@ -892,7 +893,8 @@ position. The bottom line: X, Y and R, and <code>OFF</code> when the stand does 
 <a href="#set-modes">UF8 Modes</a>)</td><td>White on and off</td></tr>
 <tr><td>DynaMount</td><td>Rotation. The stand turns about a second after you stop.</td><td>Nothing</td></tr>
 </tbody></table>
-<p>In TotalMix, after a push the same V-Pot ignores turning for {{pushQuietMs}} ms, as on the UF1.</p>
+<p>In TotalMix, after a push the same V-Pot ignores turning for {{pushQuietMs}} ms, as on the UF1.
+A pan moves in whole percent and stops on the centre on its way to the other side.</p>
 </div>
 
 <div class="ctl" id="u-pan" data-uf8="kPan">
@@ -1460,11 +1462,13 @@ by your user only.</td></tr>
 snapshots of the performers.</td></tr>
 <tr><th><code>~/Library/Application Support/ORC/profiles</code></th><td>The settings as they were
 before each profile import, one <code>.orcprofile</code> file each (<a href="#set-connection">Profiles</a>).</td></tr>
+<tr><th><code>/tmp/rme_pan.log</code></th><td>Every change the UF1 and the UF8 make to an output's pan,
+with the control that made it. Useful when a pan moved and nobody knows why.</td></tr>
 <tr><th><code>/tmp/orc.log</code></th><td>ORC's log. Useful with a bug report.</td></tr>
 </tbody></table>
 <p>To start from scratch, quit ORC and remove the folder <code>~/Library/Application Support/ORC</code>.</p>
 <p>Under Windows the same files are in <code>%APPDATA%\ORC</code>, readable by your user only, and the
-log is <code>%TEMP%\orc.log</code>. The settings window's browser data is in
+logs are <code>%TEMP%\orc.log</code> and <code>%TEMP%\rme_pan.log</code>. The settings window's browser data is in
 <code>%LOCALAPPDATA%\ORC\WebView2</code>.</p>
 </section>
 

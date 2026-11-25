@@ -6,6 +6,7 @@
 #include "Uf8Rme.h"
 #include "RmeStrip.h"
 
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -49,6 +50,27 @@ static State fixture()
 
 int main()
 {
+    // ── the pan step (Frank 25.11.2026: L1 to R1, never C, at V-Pot speed 0.75) ──
+    {
+        auto near = [](double a, double b) { return std::abs(a - b) < 1e-9; };
+        // Speed 0.75 is 1.5 % a count: whole percent, and C on the way over.
+        EXPECT(near(rmeu::panTurn(0.01, -1, 0.75, false), 0.0));
+        EXPECT(near(rmeu::panTurn(0.0, -1, 0.75, false), -0.02) || near(rmeu::panTurn(0.0, -1, 0.75, false), -0.01));
+        EXPECT(near(rmeu::panTurn(-0.01, 1, 0.75, false), 0.0));
+        EXPECT(near(rmeu::panTurn(0.30, -40, 1.0, false), 0.0));    // a fast turn stops on C too
+        EXPECT(near(rmeu::panTurn(0.0, -40, 1.0, false), -0.80));   // and leaves it freely
+        // A value off the grid (from before) lands on whole percent.
+        EXPECT(near(rmeu::panTurn(0.013, 1, 1.0, false), 0.03));
+        const double r = rmeu::panTurn(0.0, 1, 0.75, false);
+        EXPECT(near(r * 100.0, std::round(r * 100.0)));
+        // Ends, and the width: whole percent, no centre.
+        EXPECT(near(rmeu::panTurn(0.99, 5, 1.0, false), 1.0));
+        EXPECT(near(rmeu::panTurn(-0.99, -5, 1.0, false), -1.0));
+        EXPECT(near(rmeu::panTurn(0.51, -2, 1.0, true), 0.47));
+        EXPECT(near(rmeu::panTurn(0.01, -1, 1.0, true), 0.0));
+        EXPECT(near(rmeu::panTurn(0.6, -100, 1.0, true), 0.0));
+    }
+
     const State st = fixture();
     Config cfg;
     cfg.jogTarget = "main";

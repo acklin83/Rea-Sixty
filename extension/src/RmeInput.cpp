@@ -245,10 +245,12 @@ bool encoder(State& s, const Host& h, const rme::State& st, const Config& cfg,
         if (a.empty()) return true;
         bool known = false;
         const double cur = rmeu::panValue(st, r, sel, sub, known);
-        // On the FX row the pot is the width, 0 mono .. 1 stereo.
-        const double lo  = rmeu::panIsWidth(r) ? 0.0 : -1.0;
-        const double nv  = std::clamp(cur + delta * 0.02 * potScale(h), lo, 1.0);
-        if (nv != cur) out.push_back({ a, static_cast<float>(nv) });
+        // On the FX row the pot is the width, 0 mono .. 1 stereo (panTurn).
+        const double nv  = rmeu::panTurn(cur, delta, potScale(h), rmeu::panIsWidth(r));
+        if (nv != cur) {
+            rmeu::logOutputPan(a, cur, nv, "UF1 pot above the fader");
+            out.push_back({ a, static_cast<float>(nv) });
+        }
         return true;
     }
     return true;
@@ -384,7 +386,12 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
             // FX row it is the width, and its neutral is full stereo.
             const std::string a = rmeu::panAddress(r, sel,
                                       rmeu::effectiveSubmix(st, s.submix.load()));
-            if (!a.empty()) out.push_back({ a, rmeu::panIsWidth(r) ? 1.0f : 0.0f });
+            if (!a.empty()) {
+                bool known = false;
+                rmeu::logOutputPan(a, rmeu::panValue(st, r, sel, rmeu::effectiveSubmix(st, s.submix.load()), known),
+                                   0.0, "UF1 pot above the fader, push");
+                out.push_back({ a, rmeu::panIsWidth(r) ? 1.0f : 0.0f });
+            }
             return true;
         }
         // An effect is not a stereo pair: the key above the channel does nothing.
