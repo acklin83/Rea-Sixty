@@ -93,3 +93,27 @@ vor dem Import ja, Endung `.orcprofile`.
   mit Gerätedatei-Fix (`9700b59a`) und Pan (`eb6d00dd`). App + DMG notarisiert, im DMG geprüft,
   Windows-Installer aus CI, Handbuch ORC `d3b021f`, Website-Knopf `ff2128a6` (private, gebaut,
   Deploy durch Frank). Aus dem DMG nach /Applications (ORC von Frank beendet, Anmeldeobjekt blieb).
+
+## 25.11.2026: Drehungen beim Hochfahren, ORC 1.8.2, Rea-Sixty v0.9.5
+
+- Frank: Pans wieder verschoben. `rme_pan.log` 13:38:38: V-Pots 2 bis 6 je 1 bis 2 Rasten in
+  derselben Sekunde, 3 s nachdem ORC die UF8 geöffnet hatte. Um 13:38:30 bis :34 hatte macOS den
+  ganzen USB-Baum neu angemeldet (Fireface, UF1, UF8, Hub, T7, Cam Link; kein Sleep). Die UF1
+  meldete in ihren ersten 1,6 s 16 Jog-Rasten nach links (= Main). REAPER lief nicht (seit 11:43).
+  Warum der Baum neu kam, ist offen.
+- `src/OpenQuiet.h`: gesperrt, solange die Init läuft, und 5 s danach. `UF8Device`/`UF1Device`
+  setzen es in `open()` und am Ende von `runInit_` (Scope-Guard, jeder Ausgang) und markieren im
+  Read-Callback, was ihre Handler sehen (`inputSettling()`, thread_local, kein Zugriff auf
+  `g_uf1_dev` vom Eingangs-Thread). Abgefangen: ORC UF8 (alle Modi, auch Kanal-Encoder), ORC UF1
+  (Drehungen), Rea-Sixty Side-Car UF8 (V-Pots + Kanal-Encoder) und UF1 (`uf1RmeEncoder_`).
+  Jede verworfene Drehung als `ignored` in `rme_pan.log`. Test in test_rme_input.
+- Nicht abgefangen: Rea-Sixtys eigene REAPER-Wege (Spur-Pan, Parameter) bekommen dieselben
+  Drehungen, wenn der Baum bei laufendem REAPER neu kommt. Nur genannt.
+- ORC 1.8.2 (Build 18, `8a0affba`): https://github.com/acklin83/ORC/releases/tag/v1.8.2,
+  Handbuch ORC `e898ec1`.
+- Rea-Sixty v0.9.5 „Lock, Step and Gone“ (Tag auf `7d2ac94f`): alles seit v0.9.4, also Farben,
+  TotalMix-Namen, Pan-Mitte, Lock im Focused Panel (`f3d1cba4`), Sperre beim Hochfahren.
+- Website `2afb470d` (main gemergt, ORC-Knopf 1.8.2) nach `private`, gebaut; Deploy durch Frank.
+- Rea-Sixty v0.9.5 RAUS: https://github.com/acklin83/Rea-Sixty/releases/tag/v0.9.5, Tag-CI grün,
+  ReaPack 0.9.5 (12 Adressen 200).
+- ORC 1.8.2 aus dem DMG nach /Applications (ORC von Frank beendet), Anmeldeobjekt blieb, enabled.
