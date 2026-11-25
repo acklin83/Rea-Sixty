@@ -86,3 +86,10 @@ vor dem Import ja, Endung `.orcprofile`.
 - `rmeu::logOutputPan` → `/tmp/rme_pan.log`: jede Änderung an `/output/<n>/balpan` mit Quelle,
   auch Pushes. Nur Diagnose.
 - Nicht gebaut: Schutz gegen gestreifte V-Pots (genannt, Frank entscheidet).
+
+## 25.11.2026: ORC 1.8.1
+
+- ORC 1.8.1 (Build 17, `f7209c8b`) released: https://github.com/acklin83/ORC/releases/tag/v1.8.1,
+  mit Gerätedatei-Fix (`9700b59a`) und Pan (`eb6d00dd`). App + DMG notarisiert, im DMG geprüft,
+  Windows-Installer aus CI, Handbuch ORC `d3b021f`, Website-Knopf `ff2128a6` (private, gebaut,
+  Deploy durch Frank). Aus dem DMG nach /Applications (ORC von Frank beendet, Anmeldeobjekt blieb).
