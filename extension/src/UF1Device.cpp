@@ -147,6 +147,7 @@ bool UF1Device::open()
     shuttingDown_ = false;
     initInProgress_ = true;
     awake_.store(false);
+    openQuiet_.opened(reasixty::steadyNowMs());
     worker_ = std::thread([this]{ workerLoop_(); });
     initThread_ = std::thread([this]{ runInit_(); });
     return true;
@@ -154,6 +155,12 @@ bool UF1Device::open()
 
 void UF1Device::runInit_()
 {
+    // Every way out of the init ends it for OpenQuiet: the 5 s count from here.
+    struct InitEnd {
+        reasixty::OpenQuiet& q;
+        ~InitEnd() { q.initDone(reasixty::steadyNowMs()); }
+    } initEnd{openQuiet_};
+
     // Let the worker post its first IN transfer + a keepalive.
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
@@ -664,6 +671,8 @@ void UF1Device::readCallback_(libusb_transfer* xfer)
                     break;
                 }
         }
+        // The handlers below ask reasixty::inputSettling() (OpenQuiet.h).
+        const reasixty::InputSettling settling(self->openQuiet_);
         if (self->rawInputHandler_) self->rawInputHandler_(xfer->buffer, len);
         if (self->inputHandler_) {
             // Prepend any residual (a frame straddling the previous URB boundary),

@@ -202,6 +202,7 @@ bool UF8Device::open(int unitIndex)
     // while runInit_() is replaying the boot sequence.
     shuttingDown_ = false;
     initInProgress_ = true;
+    openQuiet_.opened(reasixty::steadyNowMs());
     worker_ = std::thread([this]{ workerLoop_(); });
 
     // Init replay runs on its own thread so REAPER's plugin-load (which
@@ -216,6 +217,12 @@ bool UF8Device::open(int unitIndex)
 
 void UF8Device::runInit_()
 {
+    // Every way out of the init ends it for OpenQuiet: the 5 s count from here.
+    struct InitEnd {
+        reasixty::OpenQuiet& q;
+        ~InitEnd() { q.initDone(reasixty::steadyNowMs()); }
+    } initEnd{openQuiet_};
+
     // Give the worker a beat to post its first IN transfer.
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
@@ -624,6 +631,8 @@ void UF8Device::readCallback_(libusb_transfer* xfer)
         self->traceFrame_('I', xfer->buffer,
                           static_cast<size_t>(xfer->actual_length), 0);
 
+        // The handlers below ask reasixty::inputSettling() (OpenQuiet.h).
+        const reasixty::InputSettling settling(self->openQuiet_);
         if (self->rawInputHandler_) {
             self->rawInputHandler_(xfer->buffer, static_cast<size_t>(xfer->actual_length));
         }

@@ -29117,6 +29117,17 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
             // regardless of FLIP. Atomic setter → safe from the input thread.
             // TotalMix side-car: the strip's gain or pan (Uf8Rme), and the
             // channel encoder Main, as the UF1's jog (plan 2.1).
+            // ⇨ A UF8 THAT JUST OPENED TURNS ITS OWN V-POTS (OpenQuiet.h, Frank
+            // 25.11.2026): on the side-car that was five output pans at once.
+            if (((hwPot < 8 && tmOwnsStrip_(strip)) || (hwPot == 8 && unit == 0 && tmOwnsStrip_(0)))
+                && reasixty::inputSettling()) {
+                char src[32];
+                if (hwPot == 8) std::snprintf(src, sizeof(src), "UF8 channel encoder");
+                else std::snprintf(src, sizeof(src), "UF8 V-Pot %d", strip + 1);
+                reasixty::rme::uf1::logSettlingTurn(src, signed6);
+                i += frameSize;
+                continue;
+            }
             if (hwPot < 8 && tmOwnsStrip_(strip)) {
                 auto& rm = reasixty::rme::manager();
                 tmSend_(reasixty::rme::uf8side::vpot(rm.snapshot(), g_rmeIn, g_uf8RmeSide,
@@ -29457,6 +29468,15 @@ namespace rmes = reasixty::rme::strip;
 // true = verbraucht. Nur aufrufen, wenn uf1RmeActive_().
 static bool uf1RmeEncoder_(uint8_t id, int delta)
 {
+    // ⇨ A UF1 THAT JUST OPENED TURNS ITS OWN JOG (OpenQuiet.h, Frank 25.11.2026).
+    // Used up, so it reaches nothing else either.
+    if (reasixty::inputSettling()) {
+        char src[32];
+        if (id == uf1::enc::kJog) std::snprintf(src, sizeof(src), "UF1 jog");
+        else std::snprintf(src, sizeof(src), "UF1 encoder 0x%02X", id);
+        reasixty::rme::uf1::logSettlingTurn(src, delta);
+        return true;
+    }
     auto& rm = reasixty::rme::manager();
     rmes::Writes w;
     const bool used = reasixty::rme::input::encoder(

@@ -22,6 +22,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "OpenQuiet.h"
 #include "UF1Protocol.h"
 
 struct libusb_context;
@@ -120,6 +121,8 @@ private:
     // REAPER's onTimer pushes don't interleave with init frames; the FF 1B
     // keepalive + IN reads continue throughout.
     std::atomic<bool>     initInProgress_{false};
+    // Turns are ignored while the init runs and 5 s after (OpenQuiet.h).
+    reasixty::OpenQuiet   openQuiet_;
     std::thread           worker_;
     std::thread           initThread_;
     InputHandler          inputHandler_;

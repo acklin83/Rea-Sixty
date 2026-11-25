@@ -191,6 +191,11 @@ double panTurn(double cur, int delta, double scale, bool width);
 // is not logged. Diagnosis only, it changes nothing.
 void logOutputPan(const std::string& address, double from, double to, const char* source);
 
+// ⇨ A TURN THAT CAME WHILE ITS SURFACE WAS STILL SETTLING (OpenQuiet.h, Frank
+// 25.11.2026), also into rme_pan.log: which control, how long after the open.
+// The turn did nothing; the line shows whether the 5 s were enough.
+void logSettlingTurn(const char* source, int delta);
+
 // Name and palette colour of a channel, "" / -1 when unknown.
 const Channel* channelOf(const State& st, Row r, int ch);
 

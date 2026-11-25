@@ -1,6 +1,7 @@
 #include "RmeUf1.h"
 
 #include "LogPath.h"
+#include "OpenQuiet.h"
 
 #include <algorithm>
 #include <cmath>
@@ -349,6 +350,18 @@ double panTurn(double cur, int delta, double scale, bool width)
     if (!width && onSide && ((cur > 0.0 && nv < 0.0) || (cur < 0.0 && nv > 0.0))) nv = 0.0;
     if (std::abs(nv) < 1e-9) nv = 0.0;
     return std::clamp(nv, lo, 1.0);
+}
+
+void logSettlingTurn(const char* source, int delta)
+{
+    if (FILE* f = std::fopen(uf8::logPath("rme_pan.log").c_str(), "a")) {
+        const std::time_t now = std::time(nullptr);
+        char when[32];
+        std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+        std::fprintf(f, "%s ignored %+d  %s, %lld ms after it opened\n", when, delta,
+                     source ? source : "?", static_cast<long long>(reasixty::inputSinceOpenMs()));
+        std::fclose(f);
+    }
 }
 
 void logOutputPan(const std::string& address, double from, double to, const char* source)

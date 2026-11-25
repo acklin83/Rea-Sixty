@@ -591,9 +591,18 @@ void Uf8Surface::onFrame_(const uf8frames::Frame& f)
         return;
     }
     if (cmd == 0x24 && f.b[2] == 0x02) {               // V-Pot rotation
-        if (sleep_.wake(nowMs_(), true)) return;       // a turn on a dark surface only wakes
         const int pot   = f.b[3];
         const int delta = uf8frames::vpotDelta(f.b[4]);
+        // ⇨ A UF8 THAT JUST OPENED TURNS ITS OWN V-POTS (OpenQuiet.h, 25.11.2026):
+        // nothing, not even the wake, in every mode.
+        if (reasixty::inputSettling()) {
+            char src[32];
+            if (pot == kChannelEncoder) std::snprintf(src, sizeof(src), "UF8 channel encoder");
+            else std::snprintf(src, sizeof(src), "UF8 V-Pot %d", pot + 1);
+            rmeu::logSettlingTurn(src, delta);
+            return;
+        }
+        if (sleep_.wake(nowMs_(), true)) return;       // a turn on a dark surface only wakes
         const rme::State st = mgr.snapshot();
         const rme::Config cfg = mgr.config();
         // The channel encoder is Main in every mode: monitor volume never hides

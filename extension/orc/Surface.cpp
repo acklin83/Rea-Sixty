@@ -145,6 +145,15 @@ void seedTransportKeys()
 // the window.
 void Surface::onEvent_(const ::uf1::InputEvent& ev)
 {
+    // ⇨ A UF1 THAT JUST OPENED TURNS ITS OWN JOG (OpenQuiet.h, 25.11.2026: 16
+    // detents of Main in its first 1.6 s). Nothing, not even the wake.
+    if (ev.kind == ::uf1::InputKind::EncoderRotate && reasixty::inputSettling()) {
+        char src[32];
+        if (ev.id == ::uf1::enc::kJog) std::snprintf(src, sizeof(src), "UF1 jog");
+        else std::snprintf(src, sizeof(src), "UF1 encoder 0x%02X", ev.id);
+        rmeu::logSettlingTurn(src, ev.delta);
+        return;
+    }
     // ⇨ THE FIRST TOUCH ONLY WAKES (the extension's rule, onUf1Event): a key
     // and its release, or a detent, do nothing else. The fader is the exception
     // there too: a hand on it works at once. Its motor reporting back is no hand.

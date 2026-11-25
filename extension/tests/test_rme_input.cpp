@@ -17,6 +17,7 @@
 //  · that an unset host callback is a state and not a crash.
 
 #include "RmeInput.h"
+#include "OpenQuiet.h"
 
 #include <cmath>
 #include <cstdio>
@@ -384,6 +385,45 @@ int main()
         EXPECT(!q.quiet(-1, 1100) && !q.quiet(5, 1100));   // out of range: free
         q.arm(9, 1000);                          // out of range: ignored
         EXPECT(reasixty::kPushQuietMs == 250);   // the UF8's window since 29.05.
+    }
+
+    // ── OpenQuiet: a surface that just opened turns nothing (Frank 25.11.) ──
+    // Its init and 5 s after: the UF8's own turns came 3 s after the open.
+    {
+        reasixty::OpenQuiet q;
+        EXPECT(!q.quiet(0) && q.sinceOpen(0) == -1);     // never opened: free
+        q.opened(1000);
+        EXPECT(q.quiet(1000) && q.quiet(5999));          // the init runs
+        EXPECT(q.quiet(60000));                          // however long it runs
+        EXPECT(q.sinceOpen(4000) == 3000);
+        q.initDone(2000);
+        EXPECT(q.quiet(6999));                           // 5 s after the init
+        EXPECT(!q.quiet(7000));
+        q.opened(10000);                                 // a reopen starts it again
+        q.initDone(10500);
+        EXPECT(q.quiet(15499) && !q.quiet(15500));
+        q.opened(20000);                                 // an init shorter than nothing:
+        q.initDone(19000);                               // the open's 5 s still hold
+        EXPECT(q.quiet(24999) && !q.quiet(25000));
+        EXPECT(reasixty::kOpenQuietMs == 5000);
+
+        // The device marks what its handlers see; nesting restores.
+        EXPECT(!reasixty::inputSettling());
+        reasixty::OpenQuiet fresh;
+        fresh.opened(reasixty::steadyNowMs());
+        {
+            const reasixty::InputSettling mark(fresh);
+            EXPECT(reasixty::inputSettling() && reasixty::inputSinceOpenMs() >= 0);
+            reasixty::OpenQuiet old;                     // opened long ago, done
+            old.opened(reasixty::steadyNowMs() - 60000);
+            old.initDone(reasixty::steadyNowMs() - 59000);
+            {
+                const reasixty::InputSettling inner(old);
+                EXPECT(!reasixty::inputSettling());
+            }
+            EXPECT(reasixty::inputSettling());
+        }
+        EXPECT(!reasixty::inputSettling());
     }
 
     // ── the side-car: the twist riding on a push is not a turn ──────────────

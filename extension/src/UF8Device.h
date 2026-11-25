@@ -18,6 +18,7 @@
 #include <thread>
 #include <vector>
 
+#include "OpenQuiet.h"
 #include "Protocol.h"
 
 struct libusb_context;
@@ -152,6 +153,8 @@ private:
     // queue while this is set so REAPER's onTimer pushes don't interleave
     // with init frames; heartbeats + IN reads continue normally.
     std::atomic<bool>     initInProgress_{false};
+    // Turns are ignored while the init runs and 5 s after (OpenQuiet.h).
+    reasixty::OpenQuiet   openQuiet_;
     std::thread           worker_;
     std::thread           initThread_;
     std::string           lastError_;
